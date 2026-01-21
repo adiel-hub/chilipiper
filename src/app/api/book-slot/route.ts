@@ -52,9 +52,9 @@ function parseDateTime(
       extractedTz = ianaMatch[1];
       cleaned = dateTimeString.replace(/\s+[A-Za-z]+\/[A-Za-z_]+[\s,]*$/, '').trim();
     } else {
-      // Try abbreviated timezone (CST, EST, etc.)
+      // Try abbreviated timezone (CST, EST, etc.) - but NOT AM/PM
       const tzMatch = dateTimeString.match(/\s+([A-Z]{2,4})[\s,]*$/i);
-      if (tzMatch) {
+      if (tzMatch && !['AM', 'PM'].includes(tzMatch[1].toUpperCase())) {
         extractedTz = tzMatch[1].toUpperCase();
         cleaned = dateTimeString.replace(/\s+[A-Z]{2,4}[\s,]*$/i, '').trim();
       }
