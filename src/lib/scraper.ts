@@ -1098,6 +1098,7 @@ export class ChiliPiperScraper {
     // Use params from API call (required, no env fallback)
     const MAX_DAYS = maxDaysParam && maxDaysParam > 0 ? maxDaysParam : 7;
     const MAX_SLOTS_PER_DAY = maxSlotsPerDayParam && maxSlotsPerDayParam > 0 ? maxSlotsPerDayParam : 10;
+    const MAX_SLOTS = MAX_DAYS * MAX_SLOTS_PER_DAY; // Total slots threshold
     
     console.log("🚀 Starting optimized slot collection (parallel extraction mode)");
     console.log(`🎯 Goal: Collect up to ${MAX_DAYS} days, ${MAX_SLOTS_PER_DAY} slots per day`);
