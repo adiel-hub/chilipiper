@@ -159,7 +159,7 @@ export async function POST(request: NextRequest) {
 
     // Times are already in user's timezone (Playwright emulates the user's timezone)
     // Just add timezone info to the response
-    let responseData = result.data;
+    let responseData: any = result.data;
     if (userTimezone && responseData) {
       responseData = {
         ...responseData,
