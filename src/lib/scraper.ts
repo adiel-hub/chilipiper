@@ -391,7 +391,10 @@ export class ChiliPiperScraper {
     maxDays?: number,
     maxSlotsPerDay?: number,
     customParams?: Record<string, string>,
-    userTimezone?: string // User's timezone - Playwright will emulate this timezone so Chili Piper displays times directly in user's timezone
+    userTimezone?: string, // User's timezone - Playwright will emulate this timezone so Chili Piper displays times directly in user's timezone
+    maxTotalSlots?: number, // Maximum total slots to collect - stop early when reached
+    startDate?: string, // Filter: only include slots from this date (YYYY-MM-DD)
+    endDate?: string // Filter: only include slots up to this date (YYYY-MM-DD)
   ): Promise<ScrapingResult> {
     // Declare variables in outer scope for error handling
     let browser: any = null;
@@ -722,7 +725,7 @@ export class ChiliPiperScraper {
       }
 
       // Collect slots using sequential collection (fastest and most reliable)
-      const collectedSlots = await this.getAvailableSlots(calendarContext, onDayComplete, maxDays, maxSlotsPerDay);
+      const collectedSlots = await this.getAvailableSlots(calendarContext, onDayComplete, maxDays, maxSlotsPerDay, maxTotalSlots, startDate, endDate);
 
       const slots = collectedSlots;
 
@@ -1092,16 +1095,41 @@ export class ChiliPiperScraper {
     return result;
   }
 
-  private async getAvailableSlots(page: any, onDayComplete?: (dayData: { date: string; slots: string[]; totalDays: number; totalSlots: number }) => void, maxDaysParam?: number, maxSlotsPerDayParam?: number): Promise<Record<string, { slots: string[] }>> {
+  private async getAvailableSlots(page: any, onDayComplete?: (dayData: { date: string; slots: string[]; totalDays: number; totalSlots: number }) => void, maxDaysParam?: number, maxSlotsPerDayParam?: number, maxTotalSlots?: number, startDate?: string, endDate?: string): Promise<Record<string, { slots: string[] }>> {
     const allSlots: Record<string, { slots: string[] }> = {};
 
     // Use params from API call (required, no env fallback)
     const MAX_DAYS = maxDaysParam && maxDaysParam > 0 ? maxDaysParam : 7;
     const MAX_SLOTS_PER_DAY = maxSlotsPerDayParam && maxSlotsPerDayParam > 0 ? maxSlotsPerDayParam : 10;
-    const MAX_SLOTS = MAX_DAYS * MAX_SLOTS_PER_DAY; // Total slots threshold
-    
+    const MAX_SLOTS = maxTotalSlots && maxTotalSlots > 0 ? maxTotalSlots : MAX_DAYS * MAX_SLOTS_PER_DAY; // Use maxTotalSlots if provided
+
     console.log("🚀 Starting optimized slot collection (parallel extraction mode)");
-    console.log(`🎯 Goal: Collect up to ${MAX_DAYS} days, ${MAX_SLOTS_PER_DAY} slots per day`);
+    console.log(`🎯 Goal: Collect up to ${MAX_DAYS} days, ${MAX_SLOTS_PER_DAY} slots per day${maxTotalSlots ? `, max ${maxTotalSlots} total slots` : ''}`);
+    if (startDate || endDate) {
+      console.log(`📆 Date filter: ${startDate || 'any'} to ${endDate || 'any'}`);
+    }
+
+    // Helper function to check if a date is within the filter range
+    // NOTE: dateKey is the raw button text (e.g., "Thursday 30th October Thu30Oct")
+    // We need to format it to YYYY-MM-DD before comparing with filters
+    const isDateInRange = (dateKey: string): boolean => {
+      // Format the dateKey to YYYY-MM-DD for comparison
+      const formattedDate = this.formatDate(dateKey);
+
+      // If formatting failed (returned original string), allow it through
+      if (formattedDate === dateKey || !formattedDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        console.log(`⚠️ Could not format date "${dateKey}" for filtering, allowing through`);
+        return true;
+      }
+
+      if (startDate && formattedDate < startDate) {
+        return false;
+      }
+      if (endDate && formattedDate > endDate) {
+        return false;
+      }
+      return true;
+    };
 
     // Collect across multiple weeks until targets met - reduced attempts since we only need 7 days
     const maxAttempts = 3; // Reduced from 12 - 7 days usually available in first week or two
@@ -1115,7 +1143,14 @@ export class ChiliPiperScraper {
       
       // Stop if we have enough days
       if (Object.keys(allSlots).length >= MAX_DAYS) {
-        console.log(`🎯 Target reached! Stopping collection.`);
+        console.log(`🎯 Target days reached! Stopping collection.`);
+        break;
+      }
+
+      // Stop if we have enough total slots
+      const currentTotalSlots = Object.values(allSlots).reduce((sum, day) => sum + day.slots.length, 0);
+      if (currentTotalSlots >= MAX_SLOTS) {
+        console.log(`🎯 Target slots reached (${currentTotalSlots}/${MAX_SLOTS})! Stopping collection.`);
         break;
       }
       
@@ -1150,6 +1185,11 @@ export class ChiliPiperScraper {
         // Add any slots found via parallel extraction
         let parallelDaysAdded = 0;
         for (const [dateKey, dayData] of Object.entries(parallelExtracted)) {
+          // Skip dates outside the filter range
+          if (!isDateInRange(dateKey)) {
+            console.log(`⏭️ Skipping ${dateKey} - outside date filter range`);
+            continue;
+          }
           if (!allSlots[dateKey] && dayData.slots.length > 0) {
             // Limit slots per day if configured
             const limitedSlots = dayData.slots.slice(0, MAX_SLOTS_PER_DAY);
@@ -1168,18 +1208,32 @@ export class ChiliPiperScraper {
                 totalSlots: totalSlots
               });
             }
+
+            // Check if we've reached max total slots
+            const totalSlotsNow = Object.values(allSlots).reduce((sum, day) => sum + day.slots.length, 0);
+            if (totalSlotsNow >= MAX_SLOTS) {
+              console.log(`🎯 Target slots reached (${totalSlotsNow}/${MAX_SLOTS}) during parallel extraction!`);
+              break;
+            }
           }
         }
-        
+
+        // Check if we've reached max total slots after parallel extraction
+        const totalSlotsAfterParallel = Object.values(allSlots).reduce((sum, day) => sum + day.slots.length, 0);
+        if (totalSlotsAfterParallel >= MAX_SLOTS) {
+          console.log(`🎯 Target slots reached! Collected ${totalSlotsAfterParallel} slots.`);
+          break;
+        }
+
         // If parallel extraction got us enough days, we're done!
         if (Object.keys(allSlots).length >= MAX_DAYS) {
           console.log(`🎯 Target reached via parallel extraction! Collected ${Object.keys(allSlots).length} days.`);
           break;
         }
         
-        // Filter out days we already got from parallel extraction
-        const daysStillNeeded = remainingDays.filter(db => !allSlots[db.dateKey]);
-        
+        // Filter out days we already got from parallel extraction and outside date range
+        const daysStillNeeded = remainingDays.filter(db => !allSlots[db.dateKey] && isDateInRange(db.dateKey));
+
         // Fall back to sequential clicking only for remaining days
         if (daysStillNeeded.length > 0 && Object.keys(allSlots).length < MAX_DAYS) {
           console.log(`🖱️ Parallel extraction got ${parallelDaysAdded} days, clicking ${daysStillNeeded.length} remaining days...`);
@@ -1190,14 +1244,20 @@ export class ChiliPiperScraper {
               console.log(`🎯 Target reached! Collected ${Object.keys(allSlots).length} days.`);
               break;
             }
-            
+
             try {
               const dateKey = buttonInfo.dateKey;
-              
+
               if (allSlots[dateKey]) {
                 continue;
               }
-              
+
+              // Skip dates outside the filter range (double-check)
+              if (!isDateInRange(dateKey)) {
+                console.log(`⏭️ Skipping ${dateKey} - outside date filter range`);
+                continue;
+              }
+
               console.log(`🖱️ Clicking day: ${dateKey}`);
               // Click the day button
               await buttonInfo.button.click();

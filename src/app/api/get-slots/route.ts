@@ -59,7 +59,10 @@ export async function POST(request: NextRequest) {
     const chiliPiperUrl = body.chili_piper_url || undefined;
     const requestedDays = body.max_days ? parseInt(body.max_days.toString(), 10) : undefined;
     const maxSlotsPerDay = body.max_slots_per_day ? parseInt(body.max_slots_per_day.toString(), 10) : undefined;
+    const maxSlots = body.max_slots ? parseInt(body.max_slots.toString(), 10) : undefined; // Limit total slots returned
     const userTimezone = body.timezone || undefined; // User's timezone for conversion
+    const startDate = body.start_date || undefined; // Filter: only include slots from this date (YYYY-MM-DD)
+    const endDate = body.end_date || undefined; // Filter: only include slots up to this date (YYYY-MM-DD)
 
     // Validate max_days if provided
     if (requestedDays && (requestedDays < 1 || requestedDays > 30)) {
@@ -97,6 +100,79 @@ export async function POST(request: NextRequest) {
       return security.addSecurityHeaders(response);
     }
 
+    // Validate max_slots if provided
+    if (maxSlots && (maxSlots < 1 || maxSlots > 100)) {
+      const responseTime = Date.now() - requestStartTime;
+      const errorResponse = ErrorHandler.createError(
+        ErrorCode.VALIDATION_ERROR,
+        'Invalid max_slots parameter',
+        'max_slots parameter must be between 1 and 100',
+        { providedValue: maxSlots },
+        requestId,
+        responseTime
+      );
+      const response = NextResponse.json(
+        errorResponse,
+        { status: 400 }
+      );
+      return security.addSecurityHeaders(response);
+    }
+
+    // Validate start_date format if provided (YYYY-MM-DD)
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (startDate && !dateRegex.test(startDate)) {
+      const responseTime = Date.now() - requestStartTime;
+      const errorResponse = ErrorHandler.createError(
+        ErrorCode.VALIDATION_ERROR,
+        'Invalid start_date format',
+        'start_date must be in YYYY-MM-DD format (e.g., "2026-01-22")',
+        { providedValue: startDate },
+        requestId,
+        responseTime
+      );
+      const response = NextResponse.json(
+        errorResponse,
+        { status: 400 }
+      );
+      return security.addSecurityHeaders(response);
+    }
+
+    // Validate end_date format if provided (YYYY-MM-DD)
+    if (endDate && !dateRegex.test(endDate)) {
+      const responseTime = Date.now() - requestStartTime;
+      const errorResponse = ErrorHandler.createError(
+        ErrorCode.VALIDATION_ERROR,
+        'Invalid end_date format',
+        'end_date must be in YYYY-MM-DD format (e.g., "2026-01-22")',
+        { providedValue: endDate },
+        requestId,
+        responseTime
+      );
+      const response = NextResponse.json(
+        errorResponse,
+        { status: 400 }
+      );
+      return security.addSecurityHeaders(response);
+    }
+
+    // Validate that end_date is not before start_date
+    if (startDate && endDate && startDate > endDate) {
+      const responseTime = Date.now() - requestStartTime;
+      const errorResponse = ErrorHandler.createError(
+        ErrorCode.VALIDATION_ERROR,
+        'Invalid date range',
+        'end_date cannot be before start_date',
+        { startDate, endDate },
+        requestId,
+        responseTime
+      );
+      const response = NextResponse.json(
+        errorResponse,
+        { status: 400 }
+      );
+      return security.addSecurityHeaders(response);
+    }
+
     console.log('🔍 Starting scraping process...');
     if (chiliPiperUrl) {
       console.log(`🔗 Using custom Chili Piper URL: ${chiliPiperUrl}`);
@@ -106,6 +182,15 @@ export async function POST(request: NextRequest) {
     }
     if (maxSlotsPerDay) {
       console.log(`🎰 Max ${maxSlotsPerDay} slots per day`);
+    }
+    if (maxSlots) {
+      console.log(`🔢 Max ${maxSlots} total slots to return`);
+    }
+    if (startDate) {
+      console.log(`📆 Start date filter: ${startDate}`);
+    }
+    if (endDate) {
+      console.log(`📆 End date filter: ${endDate}`);
     }
     if (userTimezone) {
       console.log(`🕐 User timezone: ${userTimezone} (browser will emulate this timezone)`);
@@ -129,7 +214,10 @@ export async function POST(request: NextRequest) {
         requestedDays, // maxDays parameter
         maxSlotsPerDay, // maxSlotsPerDay parameter
         body.custom_params, // custom form parameters
-        userTimezone // User's timezone - browser will emulate this timezone
+        userTimezone, // User's timezone - browser will emulate this timezone
+        maxSlots, // maxTotalSlots - stop scraping early when this limit is reached
+        startDate, // Filter: only include slots from this date
+        endDate // Filter: only include slots up to this date
       );
     }, 60000); // 60 second timeout for scraping operation
     
@@ -160,6 +248,17 @@ export async function POST(request: NextRequest) {
     // Times are already in user's timezone (Playwright emulates the user's timezone)
     // Just add timezone info to the response
     let responseData: any = result.data;
+
+    // Apply max_slots limit if specified
+    if (maxSlots && responseData && responseData.slots && responseData.slots.length > maxSlots) {
+      console.log(`🔢 Limiting slots from ${responseData.slots.length} to ${maxSlots}`);
+      responseData = {
+        ...responseData,
+        slots: responseData.slots.slice(0, maxSlots),
+        total_slots: maxSlots,
+      };
+    }
+
     if (userTimezone && responseData) {
       responseData = {
         ...responseData,
