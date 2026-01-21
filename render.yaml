@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: chili-piper-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: standard  # Needs at least standard for Playwright memory requirements
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DEFAULT_API_KEY
+        sync: false  # Set this manually in Render dashboard for security
+      - key: MAX_CONCURRENT_REQUESTS
+        value: "5"
+      - key: MAX_BROWSER_POOL_SIZE
+        value: "2"
+      - key: MAX_BROWSER_INSTANCES
+        value: "20"
+      - key: BROWSER_INSTANCE_TIMEOUT_MS
+        value: "900000"
+      - key: MAX_SCRAPING_TIMEOUT
+        value: "30000"

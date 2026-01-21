@@ -455,10 +455,19 @@ export class SecurityMiddleware {
 // Input validation schemas
 export const ValidationSchemas = {
   scrapeRequest: {
-    first_name: { type: 'string', required: true, minLength: 1, maxLength: 100 },
-    last_name: { type: 'string', required: true, minLength: 1, maxLength: 100 },
-    email: { type: 'email', required: true, maxLength: 255 },
-    phone: { type: 'phone', required: true, minLength: 10, maxLength: 20 }
+    // Person fields - all optional (use what your Chili Piper form requires)
+    first_name: { type: 'string', required: false, maxLength: 100 },
+    last_name: { type: 'string', required: false, maxLength: 100 },
+    email: { type: 'string', required: false, maxLength: 255 },
+    phone: { type: 'string', required: false, maxLength: 20 },
+    // Custom parameters for Chili Piper form (any additional fields)
+    custom_params: { type: 'object', required: false },
+    // Required API-level configuration (no env fallback)
+    chili_piper_url: { type: 'string', required: true, minLength: 10, maxLength: 500 },
+    max_days: { type: 'string', required: true },
+    max_slots_per_day: { type: 'string', required: true },
+    // Timezone support - convert slot times to user's timezone
+    timezone: { type: 'string', required: false, maxLength: 50 } // User's timezone (e.g., "America/New_York", "EST", "Asia/Jerusalem")
   },
   
   adminLogin: {

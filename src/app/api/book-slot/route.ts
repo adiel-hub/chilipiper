@@ -9,61 +9,158 @@ import { browserPool } from '@/lib/browser-pool';
 const security = new SecurityMiddleware();
 
 /**
- * Parse date/time string like "November 13, 2025 at 1:25 PM CST"
+ * Timezone offset map (hours from UTC)
+ * Positive = behind UTC (Americas), Negative = ahead of UTC (Europe/Asia)
+ */
+const TIMEZONE_OFFSETS: Record<string, number> = {
+  // US Timezones
+  'EST': -5, 'EDT': -4, 'CST': -6, 'CDT': -5, 'MST': -7, 'MDT': -6, 'PST': -8, 'PDT': -7,
+  // UTC/GMT
+  'UTC': 0, 'GMT': 0,
+  // Europe
+  'WET': 0, 'WEST': 1, 'CET': 1, 'CEST': 2, 'EET': 2, 'EEST': 3,
+  // Asia
+  'IST': 5.5, 'PKT': 5, 'BST': 6, 'ICT': 7, 'CST_CHINA': 8, 'JST': 9, 'KST': 9, 'AEST': 10, 'AEDT': 11,
+  // IANA-style timezone names (common ones)
+  'America/New_York': -5, 'America/Chicago': -6, 'America/Denver': -7, 'America/Los_Angeles': -8,
+  'America/Phoenix': -7, 'America/Anchorage': -9, 'Pacific/Honolulu': -10,
+  'Europe/London': 0, 'Europe/Paris': 1, 'Europe/Berlin': 1, 'Europe/Moscow': 3,
+  'Asia/Dubai': 4, 'Asia/Kolkata': 5.5, 'Asia/Bangkok': 7, 'Asia/Shanghai': 8, 'Asia/Tokyo': 9,
+  'Australia/Sydney': 11, 'Pacific/Auckland': 13,
+  // Israel
+  'Asia/Jerusalem': 2, 'ISR': 2, 'IDT': 3,
+};
+
+/**
+ * Parse date/time string like "November 13, 2025 at 1:25 PM"
+ * Optionally converts from source timezone to target timezone
  * Returns { date: "2025-11-13", time: "1:25 PM" }
  */
-function parseDateTime(dateTimeString: string): { date: string; time: string } | null {
+function parseDateTime(
+  dateTimeString: string,
+  sourceTimezone?: string,
+  targetTimezone?: string
+): { date: string; time: string } | null {
   try {
-    // Remove timezone info (CST, EST, etc.) - we don't need it since browser is in CST
-    const cleaned = dateTimeString.replace(/\s+(CST|EST|PST|CDT|EDT|PDT|UTC|GMT)[\s,]*$/i, '').trim();
-    
+    // Extract timezone from string if present (e.g., "... CST" or "... America/Chicago")
+    let extractedTz: string | null = null;
+    let cleaned = dateTimeString;
+
+    // Try to extract IANA-style timezone first (e.g., America/Chicago)
+    const ianaMatch = dateTimeString.match(/\s+([A-Za-z]+\/[A-Za-z_]+)[\s,]*$/);
+    if (ianaMatch) {
+      extractedTz = ianaMatch[1];
+      cleaned = dateTimeString.replace(/\s+[A-Za-z]+\/[A-Za-z_]+[\s,]*$/, '').trim();
+    } else {
+      // Try abbreviated timezone (CST, EST, etc.)
+      const tzMatch = dateTimeString.match(/\s+([A-Z]{2,4})[\s,]*$/i);
+      if (tzMatch) {
+        extractedTz = tzMatch[1].toUpperCase();
+        cleaned = dateTimeString.replace(/\s+[A-Z]{2,4}[\s,]*$/i, '').trim();
+      }
+    }
+
+    // Use extracted timezone if no source timezone provided
+    const effectiveSourceTz = sourceTimezone || extractedTz || null;
+
     // Pattern: "November 13, 2025 at 1:25 PM" or "November 13, 2025 at 1:25PM"
     const match = cleaned.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})\s+at\s+(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-    
+
     if (!match) {
       // Try alternative format without "at"
       const altMatch = cleaned.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
       if (altMatch) {
-        const [, monthName, day, year, hour, minute, ampm] = altMatch;
-        const monthMap: Record<string, number> = {
-          'january': 1, 'jan': 1, 'february': 2, 'feb': 2,
-          'march': 3, 'mar': 3, 'april': 4, 'apr': 4,
-          'may': 5, 'june': 6, 'jun': 6, 'july': 7, 'jul': 7,
-          'august': 8, 'aug': 8, 'september': 9, 'sep': 9, 'sept': 9,
-          'october': 10, 'oct': 10, 'november': 11, 'nov': 11,
-          'december': 12, 'dec': 12
-        };
-        
-        const month = monthMap[monthName.toLowerCase()];
-        if (!month) return null;
-        
-        const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        const time = `${hour}:${minute} ${ampm.toUpperCase()}`;
-        return { date, time };
+        return parseDateTimeComponents(altMatch, effectiveSourceTz, targetTimezone);
       }
       return null;
     }
-    
-    const [, monthName, day, year, hour, minute, ampm] = match;
-    const monthMap: Record<string, number> = {
-      'january': 1, 'jan': 1, 'february': 2, 'feb': 2,
-      'march': 3, 'mar': 3, 'april': 4, 'apr': 4,
-      'may': 5, 'june': 6, 'jun': 6, 'july': 7, 'jul': 7,
-      'august': 8, 'aug': 8, 'september': 9, 'sep': 9, 'sept': 9,
-      'october': 10, 'oct': 10, 'november': 11, 'nov': 11,
-      'december': 12, 'dec': 12
-    };
-    
-    const month = monthMap[monthName.toLowerCase()];
-    if (!month) return null;
-    
-    const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const time = `${hour}:${minute} ${ampm.toUpperCase()}`;
-    return { date, time };
+
+    return parseDateTimeComponents(match, effectiveSourceTz, targetTimezone);
   } catch (error) {
     console.error('Error parsing date/time:', error);
     return null;
   }
+}
+
+/**
+ * Parse date/time components and optionally convert timezone
+ */
+function parseDateTimeComponents(
+  match: RegExpMatchArray,
+  sourceTimezone: string | null,
+  targetTimezone?: string
+): { date: string; time: string } | null {
+  const [, monthName, day, year, hour, minute, ampm] = match;
+  const monthMap: Record<string, number> = {
+    'january': 1, 'jan': 1, 'february': 2, 'feb': 2,
+    'march': 3, 'mar': 3, 'april': 4, 'apr': 4,
+    'may': 5, 'june': 6, 'jun': 6, 'july': 7, 'jul': 7,
+    'august': 8, 'aug': 8, 'september': 9, 'sep': 9, 'sept': 9,
+    'october': 10, 'oct': 10, 'november': 11, 'nov': 11,
+    'december': 12, 'dec': 12
+  };
+
+  const month = monthMap[monthName.toLowerCase()];
+  if (!month) return null;
+
+  let hourNum = parseInt(hour, 10);
+  const minuteNum = parseInt(minute, 10);
+  const isPM = ampm.toUpperCase() === 'PM';
+
+  // Convert to 24-hour format for calculations
+  if (isPM && hourNum !== 12) hourNum += 12;
+  if (!isPM && hourNum === 12) hourNum = 0;
+
+  // If timezone conversion is needed
+  if (sourceTimezone && targetTimezone && sourceTimezone !== targetTimezone) {
+    const sourceOffset = TIMEZONE_OFFSETS[sourceTimezone] ?? TIMEZONE_OFFSETS[sourceTimezone.toUpperCase()];
+    const targetOffset = TIMEZONE_OFFSETS[targetTimezone] ?? TIMEZONE_OFFSETS[targetTimezone.toUpperCase()];
+
+    if (sourceOffset !== undefined && targetOffset !== undefined) {
+      // Create a date object for timezone conversion
+      const date = new Date(
+        parseInt(year, 10),
+        month - 1,
+        parseInt(day, 10),
+        hourNum,
+        minuteNum
+      );
+
+      // Calculate offset difference (in hours)
+      const offsetDiff = targetOffset - sourceOffset;
+
+      // Apply offset
+      date.setHours(date.getHours() + offsetDiff);
+
+      // Extract converted values
+      const convertedYear = date.getFullYear();
+      const convertedMonth = date.getMonth() + 1;
+      const convertedDay = date.getDate();
+      let convertedHour = date.getHours();
+      const convertedMinute = date.getMinutes();
+
+      // Convert back to 12-hour format
+      const convertedAmPm = convertedHour >= 12 ? 'PM' : 'AM';
+      if (convertedHour > 12) convertedHour -= 12;
+      if (convertedHour === 0) convertedHour = 12;
+
+      const dateStr = `${convertedYear}-${String(convertedMonth).padStart(2, '0')}-${String(convertedDay).padStart(2, '0')}`;
+      const timeStr = `${convertedHour}:${String(convertedMinute).padStart(2, '0')} ${convertedAmPm}`;
+
+      console.log(`🕐 Timezone conversion: ${sourceTimezone} -> ${targetTimezone} (offset: ${offsetDiff}h)`);
+      console.log(`   Input: ${year}-${month}-${day} ${hour}:${minute} ${ampm}`);
+      console.log(`   Output: ${dateStr} ${timeStr}`);
+
+      return { date: dateStr, time: timeStr };
+    } else {
+      console.warn(`⚠️ Unknown timezone: source=${sourceTimezone}, target=${targetTimezone}`);
+    }
+  }
+
+  // No conversion needed - return as-is
+  const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const timeStr = `${hour}:${minute} ${ampm.toUpperCase()}`;
+  return { date: dateStr, time: timeStr };
 }
 
 /**
@@ -75,25 +172,38 @@ function formatTimeForSlot(time: string): string {
 }
 
 /**
- * Build parameterized URL (helper function)
+ * Build parameterized URL - only includes non-empty fields
+ * Supports custom_params for any additional Chili Piper form fields
  */
-function buildParameterizedUrl(
+function buildParameterizedUrlOptional(
   firstName: string,
   lastName: string,
   email: string,
   phone: string,
   baseUrl: string,
-  phoneFieldId: string
+  phoneFieldId: string,
+  customParams?: Record<string, string>
 ): string {
   const urlParts = new URL(baseUrl);
-  const params = new URLSearchParams({
-    PersonFirstName: firstName,
-    PersonLastName: lastName,
-    PersonEmail: email,
-  });
+  const params = new URLSearchParams();
 
-  const phoneValue = phone.startsWith('+') ? phone : `+${phone}`;
-  params.append(phoneFieldId, phoneValue);
+  // Only add non-empty standard fields
+  if (firstName) params.append('PersonFirstName', firstName);
+  if (lastName) params.append('PersonLastName', lastName);
+  if (email) params.append('PersonEmail', email);
+  if (phone) {
+    const phoneValue = phone.startsWith('+') ? phone : `+${phone}`;
+    params.append(phoneFieldId, phoneValue);
+  }
+
+  // Add any custom parameters
+  if (customParams && typeof customParams === 'object') {
+    for (const [key, value] of Object.entries(customParams)) {
+      if (value !== undefined && value !== null && value !== '') {
+        params.append(key, String(value));
+      }
+    }
+  }
 
   const existingParams = new URLSearchParams(urlParts.search);
   for (const [key, value] of Array.from(params.entries())) {
@@ -104,23 +214,29 @@ function buildParameterizedUrl(
 }
 
 /**
- * Create a new browser instance and navigate to calendar for an email
+ * Create a new browser instance and navigate to calendar
+ * All person fields are optional - only include what your Chili Piper form requires
  */
 async function createInstanceForEmail(
   email: string,
   firstName: string,
   lastName: string,
-  phone: string
+  phone: string,
+  chiliPiperUrl: string,
+  customParams?: Record<string, string>,
+  userTimezone?: string // User's timezone - browser will emulate this timezone so times match what user sees
 ): Promise<{ browser: any; context: any; page: any } | null> {
   let browser: any = null;
   let context: any = null;
   let page: any = null;
   let releaseLock: (() => void) | null = null;
-  
+
   try {
-    const baseUrl = process.env.CHILI_PIPER_FORM_URL || "https://cincpro.chilipiper.com/concierge-router/link/lp-request-a-demo-agent-advice";
-    const phoneFieldId = process.env.CHILI_PIPER_PHONE_FIELD_ID || 'aa1e0f82-816d-478f-bf04-64a447af86b3';
-    const targetUrl = buildParameterizedUrl(firstName, lastName, email, phone, baseUrl, phoneFieldId);
+    if (!chiliPiperUrl) {
+      throw new Error('chili_piper_url is required');
+    }
+    const phoneFieldId = 'aa1e0f82-816d-478f-bf04-64a447af86b3';
+    const targetUrl = buildParameterizedUrlOptional(firstName, lastName, email, phone, chiliPiperUrl, phoneFieldId, customParams);
     
     browser = await browserPool.getBrowser();
     
@@ -140,9 +256,12 @@ async function createInstanceForEmail(
           browser = await browserPool.getBrowser();
           releaseLock = await browserPool.acquireContextLock(browser);
         }
-        // Create a context with US Central Time timezone
+        // Create a context with user's timezone (or default to US Central Time)
+        // This makes Chili Piper display times in the same timezone the user expects
+        const browserTimezone = userTimezone || 'America/Chicago';
+        console.log(`🕐 Setting browser timezone to: ${browserTimezone}`);
         context = await browser.newContext({
-          timezoneId: 'America/Chicago',
+          timezoneId: browserTimezone,
         });
         page = await context.newPage();
         break; // Success, exit retry loop
@@ -177,7 +296,7 @@ async function createInstanceForEmail(
       throw new Error('Failed to create browser context after retries');
     }
     
-    page.setDefaultNavigationTimeout(10000);
+    page.setDefaultNavigationTimeout(6000);
     await page.route("**/*", (route: any) => {
       const url = route.request().url();
       const rt = route.request().resourceType();
@@ -190,8 +309,8 @@ async function createInstanceForEmail(
       }
       route.continue();
     });
-    
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 6000 });
     
     // Click submit button
     const submitSelectors = [
@@ -204,11 +323,11 @@ async function createInstanceForEmail(
     
     for (const selector of submitSelectors) {
       try {
-        await page.click(selector, { timeout: 2000 });
+        await page.click(selector, { timeout: 500 });
         break;
       } catch {}
     }
-    
+
     // Click schedule button if present
     const scheduleSelectors = [
       '[data-test-id="ConciergeLiveBox-book"]',
@@ -216,16 +335,16 @@ async function createInstanceForEmail(
       'button:has-text("Schedule a meeting")',
       'button:has-text("Schedule")',
     ];
-    
+
     for (const selector of scheduleSelectors) {
       try {
-        await page.click(selector, { timeout: 2000 });
+        await page.click(selector, { timeout: 500 });
         break;
       } catch {}
     }
-    
+
     // Wait for calendar
-    await page.waitForSelector('[data-id="calendar-day-button"], button[data-test-id^="days:"]', { timeout: 10000 });
+    await page.waitForSelector('[data-id="calendar-day-button"], button[data-test-id^="days:"]', { timeout: 5000 });
     
     return { browser, context, page };
   } catch (error) {
@@ -264,13 +383,20 @@ export async function POST(request: NextRequest) {
       rateLimit: { maxRequests: 100, windowMs: 15 * 60 * 1000 }, // 100 requests per 15 minutes
       inputSchema: {
         type: 'object',
-        required: ['email', 'dateTime'],
+        required: ['dateTime', 'chili_piper_url'],
         properties: {
-          email: { type: 'string', format: 'email' },
-          dateTime: { type: 'string' },
+          // Person fields - all optional (use what your Chili Piper form requires)
+          email: { type: 'string' },
           firstName: { type: 'string' },
           lastName: { type: 'string' },
           phone: { type: 'string' },
+          // Custom parameters for Chili Piper form (any additional fields)
+          custom_params: { type: 'object' },
+          // Required fields
+          dateTime: { type: 'string' },
+          chili_piper_url: { type: 'string' },
+          // Timezone support - browser will emulate user's timezone so Chili Piper displays times in their timezone
+          timezone: { type: 'string' }, // User's timezone (e.g., "America/New_York", "Asia/Jerusalem") - browser will emulate this
         },
       },
       allowedMethods: ['POST'],
@@ -294,9 +420,13 @@ export async function POST(request: NextRequest) {
     }
 
     const body = securityResult.sanitizedData!;
-    const { email, dateTime, firstName, lastName, phone } = body;
+    const { email, dateTime, firstName, lastName, phone, chili_piper_url, custom_params, timezone } = body;
 
-    // Parse date/time
+    // Parse date/time - no timezone conversion needed since browser will emulate user's timezone
+    // The times displayed by Chili Piper will match what the user expects
+    if (timezone) {
+      console.log(`🕐 User timezone: ${timezone} (browser will emulate this timezone)`);
+    }
     const parsed = parseDateTime(dateTime);
     if (!parsed) {
       const responseTime = Date.now() - requestStartTime;
@@ -343,21 +473,27 @@ export async function POST(request: NextRequest) {
 
     // Run booking through concurrency manager
     const result = await concurrencyManager.execute(async () => {
-      const scraper = new ChiliPiperScraper();
-      
-      // Try to get existing instance
-      let instance = scraper.getExistingInstance(email);
+      const scraper = new ChiliPiperScraper(chili_piper_url);
+
+      // Try to get existing instance (use email if provided, otherwise generate unique key)
+      const instanceKey = email || `booking_${Date.now()}`;
+      let instance = email ? scraper.getExistingInstance(email) : null;
       let browser: any = null;
       let context: any = null;
       let page: any = null;
-      
+
       if (!instance) {
         // Create new instance on-demand
-        console.log(`📝 No existing instance for ${email}, creating new one...`);
-        if (!firstName || !lastName || !phone) {
-          throw new Error('firstName, lastName, and phone are required when creating a new instance');
-        }
-        const newInstance = await createInstanceForEmail(email, firstName, lastName, phone);
+        console.log(`📝 No existing instance for ${instanceKey}, creating new one...`);
+        const newInstance = await createInstanceForEmail(
+          email || '',
+          firstName || '',
+          lastName || '',
+          phone || '',
+          chili_piper_url,
+          custom_params,
+          timezone // User's timezone - browser will emulate this so times match
+        );
         if (!newInstance) {
           throw new Error('Failed to create browser instance');
         }
@@ -381,7 +517,7 @@ export async function POST(request: NextRequest) {
 
       // Ensure we're on calendar view
       try {
-        await page.waitForSelector('[data-id="calendar-day-button"], button[data-test-id^="days:"]', { timeout: 5000 });
+        await page.waitForSelector('[data-id="calendar-day-button"], button[data-test-id^="days:"]', { timeout: 3000 });
       } catch {
         throw new Error('Calendar not found on page');
       }
@@ -430,11 +566,11 @@ export async function POST(request: NextRequest) {
 
       // Wait for slots to load - use reliable wait condition
       try {
-        await page.waitForSelector('[data-id="calendar-slot"], button[data-test-id^="slot-"]', { timeout: 5000 });
+        await page.waitForSelector('[data-id="calendar-slot"], button[data-test-id^="slot-"]', { timeout: 2000 });
         console.log(`✅ Slot buttons appeared after clicking day button`);
       } catch (error) {
         // If slots don't appear, wait a bit more and try again
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(500);
         const slotsExist = await page.$('[data-id="calendar-slot"], button[data-test-id^="slot-"]');
         if (!slotsExist) {
           throw new Error(`No slot buttons found after clicking day button for ${date}`);

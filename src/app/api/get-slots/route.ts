@@ -3,6 +3,7 @@ import { SecurityMiddleware, ValidationSchemas } from '@/lib/security-middleware
 import { concurrencyManager } from '@/lib/concurrency-manager';
 import { ErrorHandler, ErrorCode, SuccessCode } from '@/lib/error-handler';
 // Dynamic import to avoid bundling Playwright during build
+// Note: timezone-utils no longer needed - Playwright emulates user's timezone directly
 
 const security = new SecurityMiddleware();
 
@@ -49,19 +50,24 @@ export async function POST(request: NextRequest) {
 
     const body = securityResult.sanitizedData!;
     console.log(`✅ Parsed and validated data:`, body);
-    
+
     // Record API usage
     const clientIP = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
     const userAgent = request.headers.get('user-agent') || 'unknown';
-    
-    // Extract days parameter if provided
-    const requestedDays = body.days ? parseInt(body.days.toString(), 10) : undefined;
+
+    // Extract optional configuration from request body (overrides env vars)
+    const chiliPiperUrl = body.chili_piper_url || undefined;
+    const requestedDays = body.max_days ? parseInt(body.max_days.toString(), 10) : undefined;
+    const maxSlotsPerDay = body.max_slots_per_day ? parseInt(body.max_slots_per_day.toString(), 10) : undefined;
+    const userTimezone = body.timezone || undefined; // User's timezone for conversion
+
+    // Validate max_days if provided
     if (requestedDays && (requestedDays < 1 || requestedDays > 30)) {
       const responseTime = Date.now() - requestStartTime;
       const errorResponse = ErrorHandler.createError(
         ErrorCode.VALIDATION_ERROR,
-        'Invalid days parameter',
-        'days parameter must be between 1 and 30',
+        'Invalid max_days parameter',
+        'max_days parameter must be between 1 and 30',
         { providedValue: requestedDays },
         requestId,
         responseTime
@@ -72,27 +78,58 @@ export async function POST(request: NextRequest) {
       );
       return security.addSecurityHeaders(response);
     }
-    
+
+    // Validate max_slots_per_day if provided
+    if (maxSlotsPerDay && (maxSlotsPerDay < 1 || maxSlotsPerDay > 50)) {
+      const responseTime = Date.now() - requestStartTime;
+      const errorResponse = ErrorHandler.createError(
+        ErrorCode.VALIDATION_ERROR,
+        'Invalid max_slots_per_day parameter',
+        'max_slots_per_day parameter must be between 1 and 50',
+        { providedValue: maxSlotsPerDay },
+        requestId,
+        responseTime
+      );
+      const response = NextResponse.json(
+        errorResponse,
+        { status: 400 }
+      );
+      return security.addSecurityHeaders(response);
+    }
+
     console.log('🔍 Starting scraping process...');
+    if (chiliPiperUrl) {
+      console.log(`🔗 Using custom Chili Piper URL: ${chiliPiperUrl}`);
+    }
     if (requestedDays) {
       console.log(`📅 Requested ${requestedDays} days`);
+    }
+    if (maxSlotsPerDay) {
+      console.log(`🎰 Max ${maxSlotsPerDay} slots per day`);
+    }
+    if (userTimezone) {
+      console.log(`🕐 User timezone: ${userTimezone} (browser will emulate this timezone)`);
     }
 
     // Get concurrency status for logging
     const concurrencyStatus = concurrencyManager.getStatus();
     console.log(`🚦 Concurrency status: ${concurrencyStatus.active}/${concurrencyStatus.capacity} active, ${concurrencyStatus.queued} queued`);
-    
+
     // Run the scraping through concurrency manager (dynamic import to avoid bundling Playwright)
+    // Pass userTimezone to scraper - Playwright will emulate this timezone so Chili Piper displays times directly in user's timezone
     const result = await concurrencyManager.execute(async () => {
       const { ChiliPiperScraper } = await import('@/lib/scraper');
-      const scraper = new ChiliPiperScraper();
+      const scraper = new ChiliPiperScraper(chiliPiperUrl);
       return await scraper.scrapeSlots(
-        body.first_name,
-        body.last_name,
-        body.email,
-        body.phone,
+        body.first_name || '',
+        body.last_name || '',
+        body.email || '',
+        body.phone || '',
         undefined, // onDayComplete callback
-        requestedDays // maxDays parameter
+        requestedDays, // maxDays parameter
+        maxSlotsPerDay, // maxSlotsPerDay parameter
+        body.custom_params, // custom form parameters
+        userTimezone // User's timezone - browser will emulate this timezone
       );
     }, 60000); // 60 second timeout for scraping operation
     
@@ -119,21 +156,32 @@ export async function POST(request: NextRequest) {
     
     console.log('✅ Scraping completed successfully');
     console.log(`📊 Result: ${result.data?.total_days} days, ${result.data?.total_slots} slots`);
-    
+
+    // Times are already in user's timezone (Playwright emulates the user's timezone)
+    // Just add timezone info to the response
+    let responseData = result.data;
+    if (userTimezone && responseData) {
+      responseData = {
+        ...responseData,
+        timezone: userTimezone, // The timezone the times are displayed in
+      };
+      console.log(`🕐 Times are displayed in user's timezone: ${userTimezone}`);
+    }
+
     // Record successful usage
     const responseTime = Date.now() - requestStartTime;
     security.logSecurityEvent('SCRAPING_SUCCESS', {
       endpoint: '/api/get-slots',
       userAgent,
       responseTime,
-      daysFound: result.data?.total_days,
-      slotsFound: result.data?.total_slots
+      daysFound: responseData?.total_days,
+      slotsFound: responseData?.total_slots
     }, clientIP);
-    
+
     // Create structured success response with code
     const successResponse = ErrorHandler.createSuccess(
       SuccessCode.SCRAPING_SUCCESS,
-      result.data,
+      responseData,
       requestId,
       responseTime
     );

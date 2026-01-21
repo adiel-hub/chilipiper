@@ -1,6 +1,5 @@
 import { chromium, Browser } from 'playwright';
 import { browserPool } from './browser-pool';
-import { getCalendarContextPool } from './calendar-context-pool';
 import { browserInstanceManager } from './browser-instance-manager';
 
 export interface SlotData {
@@ -16,6 +15,7 @@ export interface ScrapingResult {
     total_days: number;
     note: string;
     slots: SlotData[];
+    calendar_timezone: string; // Detected timezone of the Chili Piper calendar
   };
   error?: string;
 }
@@ -25,14 +25,15 @@ export class ChiliPiperScraper {
   private routingId: string | null = null;
   private phoneFieldId: string;
 
-  constructor(formUrl?: string) {
-    this.baseUrl = formUrl || process.env.CHILI_PIPER_FORM_URL || "https://cincpro.chilipiper.com/concierge-router/link/lp-request-a-demo-agent-advice";
-    
-    // Extract routing ID from environment, URL, or leave null for form-based approach
-    this.routingId = process.env.CHILI_PIPER_ROUTING_ID || null;
-    
-    // If no routing ID in env, try to extract from URL if it's already in routing format
-    if (!this.routingId && this.baseUrl.includes('/routing/')) {
+  constructor(formUrl: string) {
+    if (!formUrl) {
+      throw new Error('chili_piper_url is required');
+    }
+    this.baseUrl = formUrl;
+
+    // Extract routing ID from URL if it's in routing format
+    this.routingId = null;
+    if (this.baseUrl.includes('/routing/')) {
       const match = this.baseUrl.match(/\/routing\/([^/?]+)/);
       if (match) {
         this.routingId = match[1];
@@ -41,9 +42,9 @@ export class ChiliPiperScraper {
         console.log(`📋 Extracted routing ID from URL: ${this.routingId}`);
       }
     }
-    
-    // Phone field ID from HTML (aa1e0f82-816d-478f-bf04-64a447af86b3) - can be overridden via env
-    this.phoneFieldId = process.env.CHILI_PIPER_PHONE_FIELD_ID || 'aa1e0f82-816d-478f-bf04-64a447af86b3';
+
+    // Default phone field ID (standard Chili Piper field)
+    this.phoneFieldId = 'aa1e0f82-816d-478f-bf04-64a447af86b3';
   }
 
   /**
@@ -64,25 +65,30 @@ export class ChiliPiperScraper {
 
   /**
    * Builds a parameterized URL that skips form filling by passing data as query params
-   * Format: base-url?PersonFirstName=...&PersonLastName=...&PersonEmail=...&phoneParam=...
-   * Example: https://cincpro.chilipiper.com/concierge-router/link/lp-request-a-demo-agent-advice?PersonFirstName=Ali&PersonLastName=Syed&PersonEmail=ali@example.com
+   * All person fields are optional - only non-empty values are included
+   * Supports custom_params for any additional Chili Piper form fields
    */
-  private buildParameterizedUrl(firstName: string, lastName: string, email: string, phone: string): string {
-    // Always use the simple prefill format - just add query params to base URL
+  private buildParameterizedUrl(firstName: string, lastName: string, email: string, phone: string, customParams?: Record<string, string>): string {
     const urlParts = new URL(this.baseUrl);
-    
-    // Build query parameters (prefill form fields)
-    const params = new URLSearchParams({
-      PersonFirstName: firstName,
-      PersonLastName: lastName,
-      PersonEmail: email,
-    });
+    const params = new URLSearchParams();
 
-    // Add phone field - use the field ID from HTML as the parameter name
-    // Field ID: aa1e0f82-816d-478f-bf04-64a447af86b3 (can be overridden via CHILI_PIPER_PHONE_FIELD_ID)
-    // Phone should start with + if not already present
-    const phoneValue = phone.startsWith('+') ? phone : `+${phone}`;
-    params.append(this.phoneFieldId, phoneValue);
+    // Only add non-empty standard fields
+    if (firstName) params.append('PersonFirstName', firstName);
+    if (lastName) params.append('PersonLastName', lastName);
+    if (email) params.append('PersonEmail', email);
+    if (phone) {
+      const phoneValue = phone.startsWith('+') ? phone : `+${phone}`;
+      params.append(this.phoneFieldId, phoneValue);
+    }
+
+    // Add any custom parameters
+    if (customParams && typeof customParams === 'object') {
+      for (const [key, value] of Object.entries(customParams)) {
+        if (value !== undefined && value !== null && value !== '') {
+          params.append(key, String(value));
+        }
+      }
+    }
 
     // Append params to existing URL params (if any)
     const existingParams = new URLSearchParams(urlParts.search);
@@ -91,7 +97,7 @@ export class ChiliPiperScraper {
     }
 
     const finalUrl = `${urlParts.origin}${urlParts.pathname}?${existingParams.toString()}`;
-    console.log(`🔗 Built prefill URL (form filling skipped): ${finalUrl.substring(0, 150)}...`);
+    console.log(`🔗 Built prefill URL: ${finalUrl.substring(0, 150)}...`);
     return finalUrl;
   }
 
@@ -211,20 +217,188 @@ export class ChiliPiperScraper {
     return /\d{1,2}:\d{2}\s?(AM|PM)/i.test(trimmed);
   }
 
+  /**
+   * Detects the timezone displayed on the Chili Piper calendar page
+   * Looks for timezone indicators in the page content
+   */
+  private async detectCalendarTimezone(page: any): Promise<string> {
+    try {
+      // Try multiple methods to detect timezone
+      const timezoneInfo = await page.evaluate(() => {
+        // Method 1: Look for timezone text in common locations
+        const selectors = [
+          '[data-test-id*="timezone"]',
+          '[data-id*="timezone"]',
+          '.timezone',
+          '[class*="timezone"]',
+          '[class*="TimeZone"]',
+          'span:has-text("GMT")',
+          'div:has-text("GMT")',
+          'p:has-text("GMT")',
+        ];
+
+        for (const selector of selectors) {
+          try {
+            const el = document.querySelector(selector);
+            if (el && el.textContent) {
+              return el.textContent.trim();
+            }
+          } catch {}
+        }
+
+        // Method 2: Search page text for timezone patterns
+        const bodyText = document.body?.innerText || '';
+
+        // Look for GMT offset patterns like "GMT-6", "GMT+2", "UTC-5"
+        const gmtMatch = bodyText.match(/(?:GMT|UTC)\s*([+-]\d{1,2}(?::\d{2})?)/i);
+        if (gmtMatch) {
+          return gmtMatch[0];
+        }
+
+        // Look for IANA timezone names like "America/Chicago", "Europe/London"
+        const ianaMatch = bodyText.match(/([A-Z][a-z]+\/[A-Z][a-z_]+)/);
+        if (ianaMatch) {
+          return ianaMatch[0];
+        }
+
+        // Look for abbreviated timezone names like "CST", "EST", "PST"
+        const tzAbbrMatch = bodyText.match(/\b(EST|EDT|CST|CDT|MST|MDT|PST|PDT|UTC|GMT|IST|JST|CET|CEST)\b/);
+        if (tzAbbrMatch) {
+          return tzAbbrMatch[0];
+        }
+
+        return null;
+      });
+
+      if (timezoneInfo) {
+        console.log(`🕐 Detected calendar timezone from page: ${timezoneInfo}`);
+        return this.normalizeTimezone(timezoneInfo);
+      }
+
+      // Method 3: Check browser's detected timezone (fallback)
+      const browserTimezone = await page.evaluate(() => {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone;
+      });
+
+      if (browserTimezone) {
+        console.log(`🕐 Using browser timezone as fallback: ${browserTimezone}`);
+        return browserTimezone;
+      }
+
+      // Default fallback
+      console.log('🕐 Could not detect timezone, using default: America/Chicago');
+      return 'America/Chicago';
+    } catch (error) {
+      console.error('Error detecting timezone:', error);
+      return 'America/Chicago';
+    }
+  }
+
+  /**
+   * Normalizes timezone string to a standard format
+   */
+  private normalizeTimezone(tzString: string): string {
+    const normalized = tzString.trim();
+
+    // Map common patterns to IANA names
+    const tzMap: Record<string, string> = {
+      'CST': 'America/Chicago',
+      'CDT': 'America/Chicago',
+      'CENTRAL STANDARD TIME': 'America/Chicago',
+      'CENTRAL DAYLIGHT TIME': 'America/Chicago',
+      'EST': 'America/New_York',
+      'EDT': 'America/New_York',
+      'EASTERN STANDARD TIME': 'America/New_York',
+      'EASTERN DAYLIGHT TIME': 'America/New_York',
+      'PST': 'America/Los_Angeles',
+      'PDT': 'America/Los_Angeles',
+      'PACIFIC STANDARD TIME': 'America/Los_Angeles',
+      'PACIFIC DAYLIGHT TIME': 'America/Los_Angeles',
+      'MST': 'America/Denver',
+      'MDT': 'America/Denver',
+      'MOUNTAIN STANDARD TIME': 'America/Denver',
+      'MOUNTAIN DAYLIGHT TIME': 'America/Denver',
+      'GMT': 'UTC',
+      'UTC': 'UTC',
+      'IST': 'Asia/Jerusalem', // Could also be India - context dependent
+      'IDT': 'Asia/Jerusalem',
+      'ISRAEL STANDARD TIME': 'Asia/Jerusalem',
+      'ISRAEL DAYLIGHT TIME': 'Asia/Jerusalem',
+      'JST': 'Asia/Tokyo',
+      'JAPAN STANDARD TIME': 'Asia/Tokyo',
+      'CET': 'Europe/Paris',
+      'CEST': 'Europe/Paris',
+      'CENTRAL EUROPEAN TIME': 'Europe/Paris',
+      'CENTRAL EUROPEAN SUMMER TIME': 'Europe/Paris',
+    };
+
+    // Check if it's a known abbreviation
+    const upper = normalized.toUpperCase();
+    if (tzMap[upper]) {
+      return tzMap[upper];
+    }
+
+    // Look for full timezone names in the string (e.g., "Central Standard Time")
+    for (const [pattern, iana] of Object.entries(tzMap)) {
+      if (upper.includes(pattern)) {
+        return iana;
+      }
+    }
+
+    // Extract IANA name if present
+    const ianaMatch = normalized.match(/([A-Z][a-z]+\/[A-Z][a-z_]+)/);
+    if (ianaMatch) {
+      return ianaMatch[1];
+    }
+
+    // Extract GMT offset and map to timezone
+    const gmtMatch = normalized.match(/(?:GMT|UTC)\s*([+-])(\d{1,2})(?::(\d{2}))?/i);
+    if (gmtMatch) {
+      const sign = gmtMatch[1];
+      const hours = parseInt(gmtMatch[2], 10);
+      const offset = sign === '-' ? -hours : hours;
+
+      // Map common offsets to IANA timezones
+      const offsetMap: Record<number, string> = {
+        '-8': 'America/Los_Angeles',
+        '-7': 'America/Denver',
+        '-6': 'America/Chicago',
+        '-5': 'America/New_York',
+        '-4': 'America/New_York', // EDT
+        '0': 'UTC',
+        '1': 'Europe/London', // BST
+        '2': 'Asia/Jerusalem',
+        '3': 'Europe/Moscow',
+        '9': 'Asia/Tokyo',
+      };
+
+      if (offsetMap[offset]) {
+        return offsetMap[offset];
+      }
+    }
+
+    // Default fallback if we can't parse
+    console.log(`⚠️ Could not normalize timezone: "${normalized}", using America/Chicago as default`);
+    return 'America/Chicago';
+  }
+
   async scrapeSlots(
     firstName: string,
     lastName: string,
     email: string,
     phone: string,
     onDayComplete?: (dayData: { date: string; slots: string[]; totalDays: number; totalSlots: number }) => void,
-    maxDays?: number
+    maxDays?: number,
+    maxSlotsPerDay?: number,
+    customParams?: Record<string, string>,
+    userTimezone?: string // User's timezone - Playwright will emulate this timezone so Chili Piper displays times directly in user's timezone
   ): Promise<ScrapingResult> {
     // Declare variables in outer scope for error handling
     let browser: any = null;
     let context: any = null;
     let page: any | null = null;
     let releaseLock: (() => void) | null = null;
-    
+
     try {
       // Trim logs in production: only emit debug logs when SCRAPER_DEBUG=true
       const debug = (process.env.SCRAPER_DEBUG || '').toLowerCase() === 'true';
@@ -235,21 +409,15 @@ export class ChiliPiperScraper {
         console.log = () => {};
       }
 
-      console.log(`🎯 Starting scrape for ${firstName} ${lastName} (${email})`);
+      console.log(`🎯 Starting scrape for ${firstName || 'unknown'} ${lastName || 'unknown'} (${email || 'no-email'})`);
       const strictMode = (process.env.STRICT_SELECTORS || '').toLowerCase() === 'true';
-      
+
       // Build parameterized URL to skip form filling (much faster!)
       // Always use prefill URL format - just adds query params to base URL
-      const targetUrl = this.buildParameterizedUrl(firstName, lastName, email, phone);
+      const targetUrl = this.buildParameterizedUrl(firstName, lastName, email, phone, customParams);
       const useParameterizedUrl = true; // Always use prefill URLs for faster scraping
 
-      // Try warm post-form calendar context first (only if not using parameterized URL)
-      const calendarPool = getCalendarContextPool(this.baseUrl);
-      if (!useParameterizedUrl && calendarPool.isReady()) {
-        page = await calendarPool.getCalendarPage();
-      }
-
-      // Use browser pool directly if no warm context
+      // Use browser pool directly
       browser = await browserPool.getBrowser();
       
       if (!page) {
@@ -269,9 +437,12 @@ export class ChiliPiperScraper {
               browser = await browserPool.getBrowser();
               releaseLock = await browserPool.acquireContextLock(browser);
             }
-            // Create a context with US Central Time timezone
+            // Create a context with user's timezone (or default to US Central Time)
+            // This makes Chili Piper display times directly in the user's timezone
+            const browserTimezone = userTimezone || 'America/Chicago';
+            console.log(`🕐 Setting browser timezone to: ${browserTimezone}`);
             context = await browser.newContext({
-              timezoneId: 'America/Chicago', // US Central Time (handles DST automatically)
+              timezoneId: browserTimezone,
             });
             page = await context.newPage();
             break; // Success, exit retry loop
@@ -306,7 +477,7 @@ export class ChiliPiperScraper {
           throw new Error('Failed to create browser context after retries');
         }
       }
-      page.setDefaultNavigationTimeout(10000); // Reduced from 20s to 10s for speed
+      page.setDefaultNavigationTimeout(8000); // Optimized for speed
       // Aggressive resource blocking
       await page.route("**/*", (route: any) => {
         const url = route.request().url();
@@ -321,13 +492,9 @@ export class ChiliPiperScraper {
         route.continue();
       });
       
-      // Navigate to parameterized URL or base URL
-      if (!useParameterizedUrl && !calendarPool.isReady()) {
-        await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-      } else if (useParameterizedUrl) {
-        console.log(`🚀 Navigating directly to parameterized URL (skipping form)`);
-        await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-      }
+      // Navigate to parameterized URL
+      console.log(`🚀 Navigating directly to parameterized URL (skipping form)`);
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
       
       // Skip all waits - form is pre-filled via URL params, just click Submit
       console.log("⚡ Using prefill URL - form fields are already filled!");
@@ -478,7 +645,7 @@ export class ChiliPiperScraper {
         } catch {}
         for (const selector of calendarSelectors) {
           try {
-            await page.waitForSelector(selector, { timeout: 4000 });
+            await page.waitForSelector(selector, { timeout: 1500 });
             console.log(`✅ Calendar loaded on retry using selector: ${selector}`);
             calendarFound = true;
             break;
@@ -492,7 +659,7 @@ export class ChiliPiperScraper {
           for (const frame of frames) {
             for (const selector of calendarSelectors) {
               try {
-                await frame.waitForSelector(selector, { timeout: 2000 });
+                await frame.waitForSelector(selector, { timeout: 800 });
                 console.log(`✅ Calendar found inside iframe using selector: ${selector}`);
                 calendarFound = true;
                 calendarContext = frame;
@@ -525,7 +692,7 @@ export class ChiliPiperScraper {
         }
         for (const selector of calendarSelectors) {
           try {
-            await page.waitForSelector(selector, { timeout: 3000 });
+            await page.waitForSelector(selector, { timeout: 1000 });
             console.log(`✅ Calendar found on retry using selector: ${selector}`);
             calendarFound = true;
             calendarContext = page;
@@ -539,7 +706,7 @@ export class ChiliPiperScraper {
             const frames = page.frames();
             for (const frame of frames) {
               try {
-                await frame.waitForSelector('button[data-test-id*="days:"], [data-id="calendar-day-button"]', { timeout: 2000 });
+                await frame.waitForSelector('button[data-test-id*="days:"], [data-id="calendar-day-button"]', { timeout: 800 });
                 console.log(`✅ Calendar found in iframe`);
                 calendarFound = true;
                 calendarContext = frame;
@@ -555,9 +722,13 @@ export class ChiliPiperScraper {
       }
 
       // Collect slots using sequential collection (fastest and most reliable)
-      const collectedSlots = await this.getAvailableSlots(calendarContext, onDayComplete, maxDays);
+      const collectedSlots = await this.getAvailableSlots(calendarContext, onDayComplete, maxDays, maxSlotsPerDay);
 
       const slots = collectedSlots;
+
+      // Detect the calendar's timezone from the page
+      const detectedTimezone = await this.detectCalendarTimezone(page);
+      console.log(`🕐 Calendar timezone detected: ${detectedTimezone}`);
 
       // Register instance instead of closing - keep page on calendar view for future bookings
       // Ensure page is still on calendar view (it should be after getAvailableSlots)
@@ -573,7 +744,7 @@ export class ChiliPiperScraper {
         // Note: We keep the browser, context, and page open
         await browserInstanceManager.registerInstance(email, browser, context, page);
         console.log(`✅ Browser instance registered for ${email} - keeping open for future bookings`);
-        
+
         // Don't release browser back to pool - it's now managed by browserInstanceManager
         // Don't close page or context - they're kept open
       } catch (e) {
@@ -605,7 +776,7 @@ export class ChiliPiperScraper {
           flattenedSlots.push({
             date: formattedDate,
             time: timeSlot,
-            gmt: 'GMT-05:00 America/Chicago (CDT)'
+            gmt: detectedTimezone
           });
         }
       }
@@ -616,7 +787,8 @@ export class ChiliPiperScraper {
           total_slots: flattenedSlots.length,
           total_days: Object.keys(slots).length,
           note: `Found ${Object.keys(slots).length} days with ${flattenedSlots.length} total booking slots`,
-          slots: flattenedSlots
+          slots: flattenedSlots,
+          calendar_timezone: detectedTimezone
         }
       };
 
@@ -920,18 +1092,15 @@ export class ChiliPiperScraper {
     return result;
   }
 
-  private async getAvailableSlots(page: any, onDayComplete?: (dayData: { date: string; slots: string[]; totalDays: number; totalSlots: number }) => void, maxDaysParam?: number): Promise<Record<string, { slots: string[] }>> {
+  private async getAvailableSlots(page: any, onDayComplete?: (dayData: { date: string; slots: string[]; totalDays: number; totalSlots: number }) => void, maxDaysParam?: number, maxSlotsPerDayParam?: number): Promise<Record<string, { slots: string[] }>> {
     const allSlots: Record<string, { slots: string[] }> = {};
 
-    // Early-exit controls to reduce latency
-    // Use maxDaysParam if provided, otherwise check environment variable, otherwise default to 7
-    const maxDaysEnv = maxDaysParam || parseInt(process.env.SCRAPE_MAX_DAYS || '', 10);
-    const maxSlotsEnv = parseInt(process.env.SCRAPE_MAX_SLOTS || '', 10);
-    const MAX_DAYS = Number.isFinite(maxDaysEnv) && maxDaysEnv > 0 ? maxDaysEnv : 7; // default 7 days
-    const MAX_SLOTS = Number.isFinite(maxSlotsEnv) && maxSlotsEnv > 0 ? maxSlotsEnv : Number.MAX_SAFE_INTEGER; // default unlimited
+    // Use params from API call (required, no env fallback)
+    const MAX_DAYS = maxDaysParam && maxDaysParam > 0 ? maxDaysParam : 7;
+    const MAX_SLOTS_PER_DAY = maxSlotsPerDayParam && maxSlotsPerDayParam > 0 ? maxSlotsPerDayParam : 10;
     
     console.log("🚀 Starting optimized slot collection (parallel extraction mode)");
-    console.log(`🎯 Goal: Collect up to ${MAX_DAYS} days or ${MAX_SLOTS} total slots (early-exit enabled)`);
+    console.log(`🎯 Goal: Collect up to ${MAX_DAYS} days, ${MAX_SLOTS_PER_DAY} slots per day`);
 
     // Collect across multiple weeks until targets met - reduced attempts since we only need 7 days
     const maxAttempts = 3; // Reduced from 12 - 7 days usually available in first week or two
@@ -981,7 +1150,9 @@ export class ChiliPiperScraper {
         let parallelDaysAdded = 0;
         for (const [dateKey, dayData] of Object.entries(parallelExtracted)) {
           if (!allSlots[dateKey] && dayData.slots.length > 0) {
-            allSlots[dateKey] = dayData;
+            // Limit slots per day if configured
+            const limitedSlots = dayData.slots.slice(0, MAX_SLOTS_PER_DAY);
+            allSlots[dateKey] = { slots: limitedSlots };
             parallelDaysAdded++;
             newDaysAdded++;
             console.log(`✅ Parallel extraction: Added ${dateKey} with ${dayData.slots.length} slots`);
@@ -1035,9 +1206,11 @@ export class ChiliPiperScraper {
               
               // Get time slots immediately after minimal delay
               const slots = await this.getTimeSlotsForCurrentDay(page);
-              
+
               if (slots.length > 0) {
-                allSlots[dateKey] = { slots };
+                // Limit slots per day if configured
+                const limitedSlots = slots.slice(0, MAX_SLOTS_PER_DAY);
+                allSlots[dateKey] = { slots: limitedSlots };
                 newDaysAdded++;
                 console.log(`✅ Added ${dateKey}: ${slots.length} slots (total days: ${Object.keys(allSlots).length})`);
                 
@@ -1551,7 +1724,7 @@ export class ChiliPiperScraper {
         // Wait for calendar to update after keyboard navigation
         for (const v of verifySelectors) {
           try { 
-            await pageOrFrame.waitForSelector(v, { timeout: 2000 }); 
+            await pageOrFrame.waitForSelector(v, { timeout: 800 }); 
             console.log('✅ Navigation likely succeeded (keyboard)'); 
             return true; 
           } catch {}
