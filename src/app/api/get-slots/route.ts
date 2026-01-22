@@ -43,6 +43,21 @@ export async function POST(request: NextRequest) {
     const body = securityResult.sanitizedData!;
     console.log(`✅ Parsed and validated data:`, body);
 
+    // Extract contact fields from custom_params if not provided at top level
+    // This supports platforms that send contact info nested in custom_params
+    let firstName = body.first_name || '';
+    let lastName = body.last_name || '';
+    let email = body.email || '';
+    let phone = body.phone || '';
+
+    if (body.custom_params && typeof body.custom_params === 'object') {
+      const params = body.custom_params as Record<string, any>;
+      firstName = firstName || params.firstname || params.first_name || '';
+      lastName = lastName || params.lastname || params.last_name || '';
+      phone = phone || params.phone || '';
+      email = email || params.email || '';
+    }
+
     // Record API usage
     const clientIP = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
     const userAgent = request.headers.get('user-agent') || 'unknown';
@@ -198,10 +213,10 @@ export async function POST(request: NextRequest) {
       const { ChiliPiperScraper } = await import('@/lib/scraper');
       const scraper = new ChiliPiperScraper(chiliPiperUrl);
       return await scraper.scrapeSlots(
-        body.first_name || '',
-        body.last_name || '',
-        body.email || '',
-        body.phone || '',
+        firstName,
+        lastName,
+        email,
+        phone,
         undefined, // onDayComplete callback
         requestedDays, // maxDays parameter
         maxSlotsPerDay, // maxSlotsPerDay parameter

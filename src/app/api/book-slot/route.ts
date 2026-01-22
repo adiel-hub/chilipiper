@@ -420,7 +420,23 @@ export async function POST(request: NextRequest) {
     }
 
     const body = securityResult.sanitizedData!;
-    const { email, dateTime, firstName, lastName, phone, chili_piper_url, custom_params, timezone } = body;
+
+    // Extract contact fields from custom_params if not provided at top level
+    // This supports platforms that send contact info nested in custom_params
+    let email = body.email || '';
+    let firstName = body.firstName || '';
+    let lastName = body.lastName || '';
+    let phone = body.phone || '';
+
+    if (body.custom_params && typeof body.custom_params === 'object') {
+      const params = body.custom_params as Record<string, any>;
+      firstName = firstName || params.firstname || params.first_name || '';
+      lastName = lastName || params.lastname || params.last_name || '';
+      phone = phone || params.phone || '';
+      email = email || params.email || '';
+    }
+
+    const { dateTime, chili_piper_url, custom_params, timezone } = body;
 
     // Parse date/time - no timezone conversion needed since browser will emulate user's timezone
     // The times displayed by Chili Piper will match what the user expects
@@ -452,12 +468,47 @@ export async function POST(request: NextRequest) {
     if (email.toLowerCase().includes('test')) {
       console.log(`🧪 Test mode: Email contains "test", returning mock success response`);
       const responseTime = Date.now() - requestStartTime;
+
+      // Format dateTime with timezone
+      const formatDateTime = (dateStr: string, timeStr: string, tz?: string): string => {
+        try {
+          const [year, month, day] = dateStr.split('-').map(Number);
+          const dateObj = new Date(year, month - 1, day);
+          const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+          const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+                             'July', 'August', 'September', 'October', 'November', 'December'];
+
+          // Get timezone abbreviation
+          let tzAbbr = '';
+          if (tz) {
+            const tzMap: Record<string, string> = {
+              'Asia/Jerusalem': 'IST',
+              'America/New_York': 'EST',
+              'America/Chicago': 'CST',
+              'America/Denver': 'MST',
+              'America/Los_Angeles': 'PST',
+              'Europe/London': 'GMT',
+              'Europe/Paris': 'CET',
+              'UTC': 'UTC',
+              'GMT': 'GMT',
+            };
+            tzAbbr = tzMap[tz] || tz.split('/').pop()?.toUpperCase() || '';
+          }
+
+          const formatted = `${dayNames[dateObj.getDay()]}, ${monthNames[month - 1]} ${day}, ${year} at ${timeStr}`;
+          return tzAbbr ? `${formatted} ${tzAbbr}` : formatted;
+        } catch (error) {
+          return `${dateStr} at ${timeStr}`;
+        }
+      };
+
       const successResponse = ErrorHandler.createSuccess(
         SuccessCode.OPERATION_SUCCESS,
         {
           message: 'Slot booked successfully (TEST MODE - no actual booking performed)',
           date: date,
           time: time,
+          dateTime: formatDateTime(date, time, timezone),
           testMode: true,
         },
         requestId,
@@ -707,12 +758,47 @@ export async function POST(request: NextRequest) {
     }, 30000); // 30 second timeout for booking
 
     const responseTime = Date.now() - requestStartTime;
+
+    // Format dateTime in the same format as get-slots: "Wednesday, January 22, 2026 at 10:30 AM IST"
+    const formatDateTime = (dateStr: string, timeStr: string, tz?: string): string => {
+      try {
+        const [year, month, day] = dateStr.split('-').map(Number);
+        const date = new Date(year, month - 1, day);
+        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+                           'July', 'August', 'September', 'October', 'November', 'December'];
+
+        // Get timezone abbreviation
+        let tzAbbr = '';
+        if (tz) {
+          const tzMap: Record<string, string> = {
+            'Asia/Jerusalem': 'IST',
+            'America/New_York': 'EST',
+            'America/Chicago': 'CST',
+            'America/Denver': 'MST',
+            'America/Los_Angeles': 'PST',
+            'Europe/London': 'GMT',
+            'Europe/Paris': 'CET',
+            'UTC': 'UTC',
+            'GMT': 'GMT',
+          };
+          tzAbbr = tzMap[tz] || tz.split('/').pop()?.toUpperCase() || '';
+        }
+
+        const formatted = `${dayNames[date.getDay()]}, ${monthNames[month - 1]} ${day}, ${year} at ${timeStr}`;
+        return tzAbbr ? `${formatted} ${tzAbbr}` : formatted;
+      } catch (error) {
+        return `${dateStr} at ${timeStr}`;
+      }
+    };
+
     const successResponse = ErrorHandler.createSuccess(
       SuccessCode.OPERATION_SUCCESS,
       {
         message: 'Slot booked successfully',
         date: result.date,
         time: result.time,
+        dateTime: formatDateTime(result.date, result.time, timezone),
       },
       requestId,
       responseTime
