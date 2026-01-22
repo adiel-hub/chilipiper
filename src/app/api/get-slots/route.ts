@@ -12,19 +12,11 @@ export async function POST(request: NextRequest) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
   try {
-    // Log all headers for debugging
-    const allHeaders: Record<string, string> = {};
-    request.headers.forEach((value, key) => {
-      allHeaders[key] = value;
-    });
-    console.error('📋 Get-Slots API - All headers:', JSON.stringify(allHeaders));
-    console.error('📋 Get-Slots API - X-API-Key header:', request.headers.get('x-api-key') || request.headers.get('X-API-Key') || 'NOT FOUND');
+    console.log('🔍 Get-Slots API - Request received');
     
-    console.log('🔍 Get-Slots API Debug - Request received');
-    
-    // Apply security middleware
+    // Apply security middleware (no auth required - public API)
     const securityResult = await security.secureRequest(request, {
-      requireAuth: true,
+      requireAuth: false, // Public API - no authentication required
       rateLimit: { maxRequests: 50, windowMs: 15 * 60 * 1000 }, // 50 requests per 15 minutes
       inputSchema: ValidationSchemas.scrapeRequest,
       allowedMethods: ['POST']

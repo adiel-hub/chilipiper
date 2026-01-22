@@ -1113,6 +1113,11 @@ export class ChiliPiperScraper {
     // NOTE: dateKey is the raw button text (e.g., "Thursday 30th October Thu30Oct")
     // We need to format it to YYYY-MM-DD before comparing with filters
     const isDateInRange = (dateKey: string): boolean => {
+      // If no date filters are set, all dates are in range
+      if (!startDate && !endDate) {
+        return true;
+      }
+
       // Format the dateKey to YYYY-MM-DD for comparison
       const formattedDate = this.formatDate(dateKey);
 

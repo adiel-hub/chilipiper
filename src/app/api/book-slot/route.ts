@@ -377,9 +377,9 @@ export async function POST(request: NextRequest) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
   try {
-    // Apply security middleware
+    // Apply security middleware (no auth required - public API)
     const securityResult = await security.secureRequest(request, {
-      requireAuth: true,
+      requireAuth: false, // Public API - no authentication required
       rateLimit: { maxRequests: 100, windowMs: 15 * 60 * 1000 }, // 100 requests per 15 minutes
       inputSchema: {
         type: 'object',
