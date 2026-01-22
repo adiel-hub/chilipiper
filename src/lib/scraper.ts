@@ -5,6 +5,7 @@ import { browserInstanceManager } from './browser-instance-manager';
 export interface SlotData {
   date: string;
   time: string;
+  dateTime: string; // Formatted as "Wednesday, January 22, 2026 at 10:30 AM"
   gmt: string;
 }
 
@@ -102,7 +103,35 @@ export class ChiliPiperScraper {
   }
 
   /**
-   * Formats a date string from formats like "Thursday 30th October Thu30Oct" 
+   * Formats a date and time to "Wednesday, January 22, 2026 at 10:30 AM" format
+   */
+  private formatDateTime(dateString: string, timeString: string): string {
+    try {
+      // Parse the YYYY-MM-DD format date
+      const [year, month, day] = dateString.split('-').map(Number);
+
+      // Create a date object
+      const date = new Date(year, month - 1, day);
+
+      // Get day of week
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const dayName = dayNames[date.getDay()];
+
+      // Get month name
+      const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+                         'July', 'August', 'September', 'October', 'November', 'December'];
+      const monthName = monthNames[month - 1];
+
+      // Format: "Wednesday, January 22, 2026 at 10:30 AM"
+      return `${dayName}, ${monthName} ${day}, ${year} at ${timeString}`;
+    } catch (error) {
+      console.warn(`Error formatting date-time "${dateString} ${timeString}":`, error);
+      return `${dateString} at ${timeString}`; // Fallback format
+    }
+  }
+
+  /**
+   * Formats a date string from formats like "Thursday 30th October Thu30Oct"
    * or "Monday 27th October Mon 27 Oct" to "YYYY-MM-DD" format
    */
   private formatDate(dateString: string): string {
@@ -779,6 +808,7 @@ export class ChiliPiperScraper {
           flattenedSlots.push({
             date: formattedDate,
             time: timeSlot,
+            dateTime: this.formatDateTime(formattedDate, timeSlot),
             gmt: detectedTimezone
           });
         }
