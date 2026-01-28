@@ -547,10 +547,100 @@ export class ChiliPiperScraper {
       // Navigate to parameterized URL
       console.log(`🚀 Navigating directly to parameterized URL (skipping form)`);
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
-      
+
+      // Check if this is a Concierge Router form (routing form that redirects to calendar)
+      const isConciergeRouter = this.baseUrl.includes('/concierge-router/');
+      console.error(`🔍 DEBUG: baseUrl = ${this.baseUrl}, isConciergeRouter = ${isConciergeRouter}`);
+
+      if (isConciergeRouter) {
+        console.error('🔀 Detected Concierge Router form - will fill routing questions and wait for redirect');
+
+        // Wait for routing form to load
+        await page.waitForTimeout(2000);
+
+        // Take screenshot for debugging
+        try {
+          await page.screenshot({ path: '/tmp/concierge-router-debug.png', fullPage: false });
+          console.error('📸 Screenshot saved to /tmp/concierge-router-debug.png');
+        } catch (e) {
+          console.error('Failed to take screenshot');
+        }
+
+        // Log page URL and title
+        const currentUrl = page.url();
+        const title = await page.title().catch(() => 'unknown');
+        console.error(`📄 Current URL: ${currentUrl}`);
+        console.error(`📄 Page title: ${title}`);
+
+        // Fill out any visible form fields that aren't pre-filled
+        // Look for common routing question fields
+        const formFields = await page.$$('input[type="text"], input[type="email"], input[type="tel"], select, textarea');
+        console.error(`📝 Found ${formFields.length} form fields to check`);
+
+        for (const field of formFields) {
+          try {
+            const value = await field.inputValue().catch(() => '');
+            const fieldName = await field.getAttribute('name').catch(() => '');
+            const placeholder = await field.getAttribute('placeholder').catch(() => '');
+            const fieldType = await field.getAttribute('type').catch(() => '');
+
+            // Skip if already filled
+            if (value && value.trim()) {
+              console.error(`✓ Field already filled: ${fieldName || placeholder || fieldType}`);
+              continue;
+            }
+
+            console.error(`📝 Empty field found: type=${fieldType}, name=${fieldName}, placeholder=${placeholder}`);
+
+            // Fill required standard fields with defaults if empty
+            if (fieldType === 'email' || (placeholder && placeholder.toLowerCase().includes('email'))) {
+              await field.fill(email || 'test@example.com');
+              console.error(`✓ Filled email field with: ${email || 'test@example.com'}`);
+            } else if (fieldType === 'tel' || (placeholder && placeholder.toLowerCase().includes('phone'))) {
+              await field.fill(phone || '+1234567890');
+              console.error(`✓ Filled phone field with: ${phone || '+1234567890'}`);
+            } else if (placeholder && placeholder.toLowerCase().includes('company')) {
+              await field.fill('Test Company');
+              console.error('✓ Filled company field');
+            } else if (placeholder && placeholder.toLowerCase().includes('role')) {
+              await field.fill('Manager');
+              console.error('✓ Filled role field');
+            } else if (placeholder && placeholder.toLowerCase().includes('title')) {
+              await field.fill('Manager');
+              console.error('✓ Filled title field');
+            } else if (placeholder && placeholder.toLowerCase().includes('first')) {
+              await field.fill(firstName || 'Test');
+              console.error(`✓ Filled first name field with: ${firstName || 'Test'}`);
+            } else if (placeholder && placeholder.toLowerCase().includes('last')) {
+              await field.fill(lastName || 'User');
+              console.error(`✓ Filled last name field with: ${lastName || 'User'}`);
+            }
+          } catch (error) {
+            // Skip fields that can't be filled
+            continue;
+          }
+        }
+
+        // Handle select dropdowns (company size, industry, etc.)
+        const selects = await page.$$('select');
+        for (const select of selects) {
+          try {
+            const options = await select.$$('option');
+            if (options.length > 1) {
+              // Select second option (first is usually placeholder)
+              await select.selectOption({ index: 1 });
+              const selectName = await select.getAttribute('name').catch(() => '');
+              console.log(`✓ Selected option in dropdown: ${selectName}`);
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+      }
+
       // Skip all waits - form is pre-filled via URL params, just click Submit
       console.log("⚡ Using prefill URL - form fields are already filled!");
-      
+
       // Now just click Submit button (form fields are pre-filled via URL)
       const submitSelectors = [
         'button[type="submit"]',
@@ -590,9 +680,53 @@ export class ChiliPiperScraper {
         console.log("⚠️ Submit button not found - page may have auto-submitted or gone directly to calendar");
       } else {
         console.log("✅ Form submitted (fields were pre-filled via URL)");
-        // Skip wait - page should transition immediately
       }
-      
+
+      // For Concierge Router, wait for navigation/redirect to booking page
+      // This applies whether submit button was found or not (form may auto-submit)
+      if (isConciergeRouter) {
+        console.error("⏳ Waiting for Concierge Router to redirect to booking page...");
+        const startUrl = page.url();
+        let redirectDetected = false;
+
+        try {
+          // Poll for URL change or calendar elements more aggressively
+          const checkInterval = 100; // Check every 100ms
+          const maxWaitTime = 15000; // Max 15 seconds
+          const startTime = Date.now();
+
+          while (Date.now() - startTime < maxWaitTime) {
+            // Check if URL changed (redirect happened)
+            if (page.url() !== startUrl && !page.url().includes('concierge-router')) {
+              console.error(`✅ Redirect detected! New URL: ${page.url().substring(0, 80)}...`);
+              redirectDetected = true;
+              break;
+            }
+
+            // Check if calendar appeared (redirect completed)
+            const calendarExists = await page.$('[data-id="calendar-day-button"], button[data-test-id^="days:"]').catch(() => null);
+            if (calendarExists) {
+              console.error("✅ Calendar elements detected - redirect complete");
+              redirectDetected = true;
+              break;
+            }
+
+            // Wait a bit before next check
+            await page.waitForTimeout(checkInterval);
+          }
+
+          if (redirectDetected) {
+            // Give calendar extra time to fully render
+            await page.waitForTimeout(1500);
+            console.error("✅ Ready to scrape calendar");
+          } else {
+            console.error("⚠️ No redirect detected after 15s - may already be on booking page or redirect failed");
+          }
+        } catch (error) {
+          console.error(`⚠️ Error during redirect wait: ${error}`);
+        }
+      }
+
       // Skip wait - page should already be on calendar or schedule choice
       console.log("⏳ Checking for calendar/schedule page...");
       

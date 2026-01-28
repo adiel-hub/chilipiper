@@ -3,17 +3,18 @@
  * Tests the scraper's accuracy and reliability under load
  */
 
-const API_URL = 'https://chilipiper.onrender.com/api/get-slots';
-const NUM_REQUESTS = 100;
+const API_URL = 'http://localhost:3000/api/get-slots';
+const NUM_REQUESTS = 1;
 
 const testRequest = {
-  chili_piper_url: "https://altahq.chilipiper.com/me/adiel-halevi/meeting-with-adiel",
+  chili_piper_url: "https://cincpro.chilipiper.com/concierge-router/link/lp-request-a-demo-agent-advice",
   max_days: "3",
   max_slots_per_day: "5",
   max_slots: "5",
+  email: "test@example.com",
   timezone: "America/New_York",
   custom_params: {
-    phone: "+112211212121",
+    phone: "+1122112121",
     firstname: "adiel",
     lastname: "halevi"
   }
