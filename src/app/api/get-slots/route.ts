@@ -1,7 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { SecurityMiddleware, ValidationSchemas } from '@/lib/security-middleware';
-import { concurrencyManager } from '@/lib/concurrency-manager';
-import { ErrorHandler, ErrorCode, SuccessCode } from '@/lib/error-handler';
+import { NextRequest, NextResponse } from "next/server";
+import {
+  SecurityMiddleware,
+  ValidationSchemas,
+} from "@/lib/security-middleware";
+import { concurrencyManager } from "@/lib/concurrency-manager";
+import { ErrorHandler, ErrorCode, SuccessCode } from "@/lib/error-handler";
 // Dynamic import to avoid bundling Playwright during build
 // Note: timezone-utils no longer needed - Playwright emulates user's timezone directly
 
@@ -10,33 +13,33 @@ const security = new SecurityMiddleware();
 export async function POST(request: NextRequest) {
   const requestStartTime = Date.now(); // Start timing from the very beginning
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  
+
   try {
-    console.log('🔍 Get-Slots API - Request received');
-    
+    console.log("🔍 Get-Slots API - Request received");
+
     // Apply security middleware (no auth required - public API)
     const securityResult = await security.secureRequest(request, {
       requireAuth: false, // Public API - no authentication required
-      rateLimit: { maxRequests: 50, windowMs: 15 * 60 * 1000 }, // 50 requests per 15 minutes
+      rateLimit: { maxRequests: 150, windowMs: 15 * 60 * 1000 }, // 150 requests per 15 minutes
       inputSchema: ValidationSchemas.scrapeRequest,
-      allowedMethods: ['POST']
+      allowedMethods: ["POST"],
     });
 
     if (!securityResult.allowed) {
-      console.error('❌ Security check failed:', securityResult.response);
+      console.error("❌ Security check failed:", securityResult.response);
       const responseTime = Date.now() - requestStartTime;
       const errorResponse = ErrorHandler.createError(
         ErrorCode.UNAUTHORIZED,
-        'Request blocked by security middleware',
-        securityResult.response?.statusText || 'Authentication or validation failed',
+        "Request blocked by security middleware",
+        securityResult.response?.statusText ||
+          "Authentication or validation failed",
         undefined,
         requestId,
-        responseTime
+        responseTime,
       );
-      const response = NextResponse.json(
-        errorResponse,
-        { status: ErrorHandler.getStatusCode(errorResponse.code) }
-      );
+      const response = NextResponse.json(errorResponse, {
+        status: ErrorHandler.getStatusCode(errorResponse.code),
+      });
       return security.addSecurityHeaders(response);
     }
 
@@ -45,28 +48,37 @@ export async function POST(request: NextRequest) {
 
     // Extract contact fields from custom_params if not provided at top level
     // This supports platforms that send contact info nested in custom_params
-    let firstName = body.first_name || '';
-    let lastName = body.last_name || '';
-    let email = body.email || '';
-    let phone = body.phone || '';
+    let firstName = body.first_name || "";
+    let lastName = body.last_name || "";
+    let email = body.email || "";
+    let phone = body.phone || "";
 
-    if (body.custom_params && typeof body.custom_params === 'object') {
+    if (body.custom_params && typeof body.custom_params === "object") {
       const params = body.custom_params as Record<string, any>;
-      firstName = firstName || params.firstname || params.first_name || '';
-      lastName = lastName || params.lastname || params.last_name || '';
-      phone = phone || params.phone || '';
-      email = email || params.email || '';
+      firstName = firstName || params.firstname || params.first_name || "";
+      lastName = lastName || params.lastname || params.last_name || "";
+      phone = phone || params.phone || "";
+      email = email || params.email || "";
     }
 
     // Record API usage
-    const clientIP = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
-    const userAgent = request.headers.get('user-agent') || 'unknown';
+    const clientIP =
+      request.headers.get("x-forwarded-for") ||
+      request.headers.get("x-real-ip") ||
+      "unknown";
+    const userAgent = request.headers.get("user-agent") || "unknown";
 
     // Extract optional configuration from request body (overrides env vars)
     const chiliPiperUrl = body.chili_piper_url || undefined;
-    const requestedDays = body.max_days ? parseInt(body.max_days.toString(), 10) : undefined;
-    const maxSlotsPerDay = body.max_slots_per_day ? parseInt(body.max_slots_per_day.toString(), 10) : undefined;
-    const maxSlots = body.max_slots ? parseInt(body.max_slots.toString(), 10) : undefined; // Limit total slots returned
+    const requestedDays = body.max_days
+      ? parseInt(body.max_days.toString(), 10)
+      : undefined;
+    const maxSlotsPerDay = body.max_slots_per_day
+      ? parseInt(body.max_slots_per_day.toString(), 10)
+      : undefined;
+    const maxSlots = body.max_slots
+      ? parseInt(body.max_slots.toString(), 10)
+      : undefined; // Limit total slots returned
     const userTimezone = body.timezone || undefined; // User's timezone for conversion
     const startDate = body.start_date || undefined; // Filter: only include slots from this date (YYYY-MM-DD)
     const endDate = body.end_date || undefined; // Filter: only include slots up to this date (YYYY-MM-DD)
@@ -76,16 +88,13 @@ export async function POST(request: NextRequest) {
       const responseTime = Date.now() - requestStartTime;
       const errorResponse = ErrorHandler.createError(
         ErrorCode.VALIDATION_ERROR,
-        'Invalid max_days parameter',
-        'max_days parameter must be between 1 and 30',
+        "Invalid max_days parameter",
+        "max_days parameter must be between 1 and 30",
         { providedValue: requestedDays },
         requestId,
-        responseTime
+        responseTime,
       );
-      const response = NextResponse.json(
-        errorResponse,
-        { status: 400 }
-      );
+      const response = NextResponse.json(errorResponse, { status: 400 });
       return security.addSecurityHeaders(response);
     }
 
@@ -94,16 +103,13 @@ export async function POST(request: NextRequest) {
       const responseTime = Date.now() - requestStartTime;
       const errorResponse = ErrorHandler.createError(
         ErrorCode.VALIDATION_ERROR,
-        'Invalid max_slots_per_day parameter',
-        'max_slots_per_day parameter must be between 1 and 50',
+        "Invalid max_slots_per_day parameter",
+        "max_slots_per_day parameter must be between 1 and 50",
         { providedValue: maxSlotsPerDay },
         requestId,
-        responseTime
+        responseTime,
       );
-      const response = NextResponse.json(
-        errorResponse,
-        { status: 400 }
-      );
+      const response = NextResponse.json(errorResponse, { status: 400 });
       return security.addSecurityHeaders(response);
     }
 
@@ -112,16 +118,13 @@ export async function POST(request: NextRequest) {
       const responseTime = Date.now() - requestStartTime;
       const errorResponse = ErrorHandler.createError(
         ErrorCode.VALIDATION_ERROR,
-        'Invalid max_slots parameter',
-        'max_slots parameter must be between 1 and 100',
+        "Invalid max_slots parameter",
+        "max_slots parameter must be between 1 and 100",
         { providedValue: maxSlots },
         requestId,
-        responseTime
+        responseTime,
       );
-      const response = NextResponse.json(
-        errorResponse,
-        { status: 400 }
-      );
+      const response = NextResponse.json(errorResponse, { status: 400 });
       return security.addSecurityHeaders(response);
     }
 
@@ -131,16 +134,13 @@ export async function POST(request: NextRequest) {
       const responseTime = Date.now() - requestStartTime;
       const errorResponse = ErrorHandler.createError(
         ErrorCode.VALIDATION_ERROR,
-        'Invalid start_date format',
+        "Invalid start_date format",
         'start_date must be in YYYY-MM-DD format (e.g., "2026-01-22")',
         { providedValue: startDate },
         requestId,
-        responseTime
+        responseTime,
       );
-      const response = NextResponse.json(
-        errorResponse,
-        { status: 400 }
-      );
+      const response = NextResponse.json(errorResponse, { status: 400 });
       return security.addSecurityHeaders(response);
     }
 
@@ -149,16 +149,13 @@ export async function POST(request: NextRequest) {
       const responseTime = Date.now() - requestStartTime;
       const errorResponse = ErrorHandler.createError(
         ErrorCode.VALIDATION_ERROR,
-        'Invalid end_date format',
+        "Invalid end_date format",
         'end_date must be in YYYY-MM-DD format (e.g., "2026-01-22")',
         { providedValue: endDate },
         requestId,
-        responseTime
+        responseTime,
       );
-      const response = NextResponse.json(
-        errorResponse,
-        { status: 400 }
-      );
+      const response = NextResponse.json(errorResponse, { status: 400 });
       return security.addSecurityHeaders(response);
     }
 
@@ -167,20 +164,17 @@ export async function POST(request: NextRequest) {
       const responseTime = Date.now() - requestStartTime;
       const errorResponse = ErrorHandler.createError(
         ErrorCode.VALIDATION_ERROR,
-        'Invalid date range',
-        'end_date cannot be before start_date',
+        "Invalid date range",
+        "end_date cannot be before start_date",
         { startDate, endDate },
         requestId,
-        responseTime
+        responseTime,
       );
-      const response = NextResponse.json(
-        errorResponse,
-        { status: 400 }
-      );
+      const response = NextResponse.json(errorResponse, { status: 400 });
       return security.addSecurityHeaders(response);
     }
 
-    console.log('🔍 Starting scraping process...');
+    console.log("🔍 Starting scraping process...");
     if (chiliPiperUrl) {
       console.log(`🔗 Using custom Chili Piper URL: ${chiliPiperUrl}`);
     }
@@ -200,17 +194,21 @@ export async function POST(request: NextRequest) {
       console.log(`📆 End date filter: ${endDate}`);
     }
     if (userTimezone) {
-      console.log(`🕐 User timezone: ${userTimezone} (browser will emulate this timezone)`);
+      console.log(
+        `🕐 User timezone: ${userTimezone} (browser will emulate this timezone)`,
+      );
     }
 
     // Get concurrency status for logging
     const concurrencyStatus = concurrencyManager.getStatus();
-    console.log(`🚦 Concurrency status: ${concurrencyStatus.active}/${concurrencyStatus.capacity} active, ${concurrencyStatus.queued} queued`);
+    console.log(
+      `🚦 Concurrency status: ${concurrencyStatus.active}/${concurrencyStatus.capacity} active, ${concurrencyStatus.queued} queued`,
+    );
 
     // Run the scraping through concurrency manager (dynamic import to avoid bundling Playwright)
     // Pass userTimezone to scraper - Playwright will emulate this timezone so Chili Piper displays times directly in user's timezone
     const result = await concurrencyManager.execute(async () => {
-      const { ChiliPiperScraper } = await import('@/lib/scraper');
+      const { ChiliPiperScraper } = await import("@/lib/scraper");
       const scraper = new ChiliPiperScraper(chiliPiperUrl);
       return await scraper.scrapeSlots(
         firstName,
@@ -224,41 +222,57 @@ export async function POST(request: NextRequest) {
         userTimezone, // User's timezone - browser will emulate this timezone
         maxSlots, // maxTotalSlots - stop scraping early when this limit is reached
         startDate, // Filter: only include slots from this date
-        endDate // Filter: only include slots up to this date
+        endDate, // Filter: only include slots up to this date
       );
     }, 60000); // 60 second timeout for scraping operation
-    
+
     if (!result.success) {
       console.log(`❌ Scraping failed: ${result.error}`);
-      
+
       // Record failed usage
       const responseTime = Date.now() - requestStartTime;
-      security.logSecurityEvent('SCRAPING_FAILED', {
-        endpoint: '/api/get-slots',
-        userAgent,
-        responseTime,
-        error: result.error
-      }, clientIP);
-      
-      const errorResponse = ErrorHandler.parseError(result.error, requestId, responseTime);
-      const response = NextResponse.json(
-        errorResponse,
-        { status: ErrorHandler.getStatusCode(errorResponse.code) }
+      security.logSecurityEvent(
+        "SCRAPING_FAILED",
+        {
+          endpoint: "/api/get-slots",
+          userAgent,
+          responseTime,
+          error: result.error,
+        },
+        clientIP,
       );
-      
+
+      const errorResponse = ErrorHandler.parseError(
+        result.error,
+        requestId,
+        responseTime,
+      );
+      const response = NextResponse.json(errorResponse, {
+        status: ErrorHandler.getStatusCode(errorResponse.code),
+      });
+
       return security.addSecurityHeaders(response);
     }
-    
-    console.log('✅ Scraping completed successfully');
-    console.log(`📊 Result: ${result.data?.total_days} days, ${result.data?.total_slots} slots`);
+
+    console.log("✅ Scraping completed successfully");
+    console.log(
+      `📊 Result: ${result.data?.total_days} days, ${result.data?.total_slots} slots`,
+    );
 
     // Times are already in user's timezone (Playwright emulates the user's timezone)
     // Just add timezone info to the response
     let responseData: any = result.data;
 
     // Apply max_slots limit if specified
-    if (maxSlots && responseData && responseData.slots && responseData.slots.length > maxSlots) {
-      console.log(`🔢 Limiting slots from ${responseData.slots.length} to ${maxSlots}`);
+    if (
+      maxSlots &&
+      responseData &&
+      responseData.slots &&
+      responseData.slots.length > maxSlots
+    ) {
+      console.log(
+        `🔢 Limiting slots from ${responseData.slots.length} to ${maxSlots}`,
+      );
       responseData = {
         ...responseData,
         slots: responseData.slots.slice(0, maxSlots),
@@ -276,80 +290,79 @@ export async function POST(request: NextRequest) {
 
     // Record successful usage
     const responseTime = Date.now() - requestStartTime;
-    security.logSecurityEvent('SCRAPING_SUCCESS', {
-      endpoint: '/api/get-slots',
-      userAgent,
-      responseTime,
-      daysFound: responseData?.total_days,
-      slotsFound: responseData?.total_slots
-    }, clientIP);
+    security.logSecurityEvent(
+      "SCRAPING_SUCCESS",
+      {
+        endpoint: "/api/get-slots",
+        userAgent,
+        responseTime,
+        daysFound: responseData?.total_days,
+        slotsFound: responseData?.total_slots,
+      },
+      clientIP,
+    );
 
     // Create structured success response with code
     const successResponse = ErrorHandler.createSuccess(
       SuccessCode.SCRAPING_SUCCESS,
       responseData,
       requestId,
-      responseTime
+      responseTime,
     );
-    
-    const response = NextResponse.json(
-      successResponse,
-      { status: ErrorHandler.getSuccessStatusCode() }
-    );
+
+    const response = NextResponse.json(successResponse, {
+      status: ErrorHandler.getSuccessStatusCode(),
+    });
     return security.addSecurityHeaders(response);
-    
   } catch (error: any) {
-    console.error('❌ API error:', error);
-    
+    console.error("❌ API error:", error);
+
     const responseTime = Date.now() - requestStartTime;
-    
+
     // Handle queue timeout errors
-    if (error.message && error.message.includes('timeout')) {
+    if (error.message && error.message.includes("timeout")) {
       const errorResponse = ErrorHandler.createError(
         ErrorCode.REQUEST_TIMEOUT,
-        'Request timed out',
-        'Request timed out while waiting in queue or during execution. Please try again.',
-        { 
+        "Request timed out",
+        "Request timed out while waiting in queue or during execution. Please try again.",
+        {
           queueStatus: concurrencyManager.getStatus(),
-          originalError: error.message
+          originalError: error.message,
         },
         requestId,
-        responseTime
+        responseTime,
       );
-      const response = NextResponse.json(
-        errorResponse,
-        { status: 504 }
-      );
+      const response = NextResponse.json(errorResponse, { status: 504 });
       return security.addSecurityHeaders(response);
     }
 
     // Handle queue full errors
-    if (error.message && error.message.includes('queue is full')) {
+    if (error.message && error.message.includes("queue is full")) {
       const errorResponse = ErrorHandler.createError(
         ErrorCode.QUEUE_FULL,
-        'Request queue is full',
-        'The system is currently processing too many requests. Please try again later.',
-        { 
+        "Request queue is full",
+        "The system is currently processing too many requests. Please try again later.",
+        {
           queueStatus: concurrencyManager.getStatus(),
-          originalError: error.message
+          originalError: error.message,
         },
         requestId,
-        responseTime
+        responseTime,
       );
-      const response = NextResponse.json(
-        errorResponse,
-        { status: 503 }
-      );
+      const response = NextResponse.json(errorResponse, { status: 503 });
       return security.addSecurityHeaders(response);
     }
-    
+
     // Generic error
-    const errorResponse = ErrorHandler.parseError(error, requestId, responseTime);
-    const response = NextResponse.json(
-      errorResponse,
-      { status: ErrorHandler.getStatusCode(errorResponse.code) }
+    const errorResponse = ErrorHandler.parseError(
+      error,
+      requestId,
+      responseTime,
     );
-    
+    const response = NextResponse.json(errorResponse, {
+      status: ErrorHandler.getStatusCode(errorResponse.code),
+    });
+
     return security.addSecurityHeaders(response);
   }
 }
