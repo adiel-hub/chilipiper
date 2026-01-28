@@ -154,9 +154,9 @@ export class ConcurrencyManager {
 }
 
 // Singleton instance with configurable limits
-const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_REQUESTS || '3', 10);
-const MAX_QUEUE_SIZE = parseInt(process.env.MAX_QUEUE_SIZE || '50', 10);
-const QUEUE_TIMEOUT = parseInt(process.env.QUEUE_TIMEOUT_MS || '30000', 10);
+const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_REQUESTS || '10', 10);
+const MAX_QUEUE_SIZE = parseInt(process.env.MAX_QUEUE_SIZE || '100', 10);
+const QUEUE_TIMEOUT = parseInt(process.env.QUEUE_TIMEOUT_MS || '90000', 10);
 
 export const concurrencyManager = new ConcurrencyManager(
   MAX_CONCURRENT,

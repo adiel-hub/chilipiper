@@ -104,8 +104,9 @@ export class ChiliPiperScraper {
 
   /**
    * Formats a date and time to "Wednesday, January 22, 2026 at 10:30 AM" format
+   * Optionally includes timezone abbreviation if provided
    */
-  private formatDateTime(dateString: string, timeString: string): string {
+  private formatDateTime(dateString: string, timeString: string, timezone?: string): string {
     try {
       // Parse the YYYY-MM-DD format date
       const [year, month, day] = dateString.split('-').map(Number);
@@ -122,8 +123,27 @@ export class ChiliPiperScraper {
                          'July', 'August', 'September', 'October', 'November', 'December'];
       const monthName = monthNames[month - 1];
 
-      // Format: "Wednesday, January 22, 2026 at 10:30 AM"
-      return `${dayName}, ${monthName} ${day}, ${year} at ${timeString}`;
+      // Extract timezone abbreviation from full timezone name (e.g., "Asia/Jerusalem" -> "IST")
+      let tzAbbr = '';
+      if (timezone) {
+        // Common timezone abbreviations mapping
+        const tzMap: Record<string, string> = {
+          'Asia/Jerusalem': 'IST',
+          'America/New_York': 'EST',
+          'America/Chicago': 'CST',
+          'America/Denver': 'MST',
+          'America/Los_Angeles': 'PST',
+          'Europe/London': 'GMT',
+          'Europe/Paris': 'CET',
+          'UTC': 'UTC',
+          'GMT': 'GMT',
+        };
+        tzAbbr = tzMap[timezone] || timezone.split('/').pop()?.toUpperCase() || '';
+      }
+
+      // Format: "Wednesday, January 22, 2026 at 10:30 AM IST"
+      const formattedDateTime = `${dayName}, ${monthName} ${day}, ${year} at ${timeString}`;
+      return tzAbbr ? `${formattedDateTime} ${tzAbbr}` : formattedDateTime;
     } catch (error) {
       console.warn(`Error formatting date-time "${dateString} ${timeString}":`, error);
       return `${dateString} at ${timeString}`; // Fallback format
@@ -808,7 +828,7 @@ export class ChiliPiperScraper {
           flattenedSlots.push({
             date: formattedDate,
             time: timeSlot,
-            dateTime: this.formatDateTime(formattedDate, timeSlot),
+            dateTime: this.formatDateTime(formattedDate, timeSlot, detectedTimezone),
             gmt: detectedTimezone
           });
         }
