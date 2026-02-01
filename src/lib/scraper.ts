@@ -2,6 +2,92 @@ import { chromium, Browser } from 'playwright';
 import { browserPool } from './browser-pool';
 import { browserInstanceManager } from './browser-instance-manager';
 
+/**
+ * Normalize text for fuzzy matching
+ * Removes special chars, extra spaces, converts to lowercase
+ */
+function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Extract keywords from normalized text
+ */
+function extractKeywords(text: string): string[] {
+  const normalized = normalizeText(text);
+  const commonWords = ['the', 'a', 'an', 'of', 'at', 'your', 'is', 'are', 'how', 'many', 'what'];
+  return normalized
+    .split(' ')
+    .filter(word => word.length > 2 && !commonWords.includes(word));
+}
+
+/**
+ * Check if two texts have keyword overlap (semantic similarity)
+ * Returns match score (higher = better match)
+ */
+function calculateMatchScore(fieldText: string, paramKey: string): number {
+  const fieldKeywords = extractKeywords(fieldText);
+  const paramKeywords = extractKeywords(paramKey);
+
+  // Normalize common variations
+  const synonyms: { [key: string]: string[] } = {
+    'employee': ['employee', 'employees', 'staff', 'worker', 'workers'],
+    'company': ['company', 'firm', 'organization', 'business'],
+    'size': ['size', 'count', 'number', 'amount'],
+  };
+
+  let score = 0;
+  for (const paramWord of paramKeywords) {
+    // Check direct match
+    if (fieldKeywords.includes(paramWord)) {
+      score += 10; // High score for exact keyword match
+      continue;
+    }
+
+    // Check synonym match
+    for (const [base, variants] of Object.entries(synonyms)) {
+      if (variants.includes(paramWord)) {
+        for (const fieldWord of fieldKeywords) {
+          if (variants.includes(fieldWord)) {
+            score += 8; // Good score for synonym match
+          }
+        }
+      }
+    }
+  }
+
+  return score;
+}
+
+/**
+ * Flexibly match option value (handles variations like "5-9", "5 to 9", "5 - 9 employees")
+ */
+function matchesOptionValue(optionText: string, desiredValue: string): boolean {
+  const normalizedOption = normalizeText(optionText);
+  const normalizedDesired = normalizeText(desiredValue);
+
+  // Exact match after normalization
+  if (normalizedOption === normalizedDesired) return true;
+
+  // Contains match
+  if (normalizedOption.includes(normalizedDesired) || normalizedDesired.includes(normalizedOption)) {
+    return true;
+  }
+
+  // Extract numbers and compare (handles "5-9" vs "5 to 9")
+  const optionNumbers = optionText.match(/\d+/g);
+  const desiredNumbers = desiredValue.match(/\d+/g);
+  if (optionNumbers && desiredNumbers && optionNumbers.length === desiredNumbers.length) {
+    return optionNumbers.every((num, i) => num === desiredNumbers[i]);
+  }
+
+  return false;
+}
+
 export interface SlotData {
   date: string;
   time: string;
@@ -621,18 +707,149 @@ export class ChiliPiperScraper {
           }
         }
 
-        // Handle select dropdowns (company size, industry, etc.)
+        // Handle select dropdowns (company size, employee count, etc.) with AI-powered semantic matching
         const selects = await page.$$('select');
         for (const select of selects) {
           try {
+            // Extract field identifiers
+            const selectName = await select.getAttribute('name').catch(() => '');
+            const selectId = await select.getAttribute('id').catch(() => '');
+            const selectPlaceholder = await select.getAttribute('placeholder').catch(() => '');
+
+            // Look for associated label - try multiple strategies
+            let labelText = '';
+
+            // Strategy 1: label[for="id"]
+            if (selectId && selectId !== 'null') {
+              const label = await page.$(`label[for="${selectId}"]`).catch(() => null);
+              if (label) {
+                labelText = await label.textContent().catch(() => '');
+              }
+            }
+
+            // Strategy 2: Look for label as previous sibling or parent
+            if (!labelText) {
+              try {
+                // Try to get parent's previous sibling (common pattern)
+                const parentElement = await select.evaluateHandle((el: any) => el.parentElement);
+                const prevSibling = await parentElement.evaluateHandle((el: any) => el.previousElementSibling);
+                const prevText = await prevSibling.evaluate((el: any) => el?.textContent || '').catch(() => '');
+                if (prevText) {
+                  labelText = prevText;
+                }
+              } catch (e) {
+                // Ignore
+              }
+            }
+
+            // Strategy 3: Look for any label element near the select
+            if (!labelText) {
+              try {
+                const nearbyLabel = await select.evaluateHandle((el: any) => {
+                  // Walk up the DOM tree to find a parent with a label
+                  let parent = el.parentElement;
+                  while (parent && parent !== document.body) {
+                    const label = parent.querySelector('label');
+                    if (label && label.textContent) {
+                      return label;
+                    }
+                    parent = parent.parentElement;
+                  }
+                  return null;
+                });
+                labelText = await nearbyLabel.evaluate((el: any) => el?.textContent || '').catch(() => '');
+              } catch (e) {
+                // Ignore
+              }
+            }
+
+            console.error(`📝 Found dropdown: name="${selectName}", id="${selectId}", label="${labelText}"`);
+
+            // Find matching custom_param for this dropdown
+            let selectedValue: string | null = null;
+            let matchMethod = '';
+
+            if (customParams) {
+              // Tier 1: Exact match by name or id
+              if (selectName && customParams[selectName]) {
+                selectedValue = customParams[selectName];
+                matchMethod = `exact name match: "${selectName}"`;
+              } else if (selectId && customParams[selectId]) {
+                selectedValue = customParams[selectId];
+                matchMethod = `exact id match: "${selectId}"`;
+              }
+              // Tier 2: Semantic/keyword match by label
+              else {
+                let bestMatch: { key: string; value: string; score: number } | null = null;
+
+                for (const [key, value] of Object.entries(customParams)) {
+                  // Skip non-string values and known field names (firstname, lastname, etc.)
+                  if (typeof value !== 'string' || ['firstname', 'lastname', 'email', 'phone'].includes(key.toLowerCase())) {
+                    continue;
+                  }
+
+                  // Calculate match scores against all field identifiers
+                  const labelScore = labelText ? calculateMatchScore(labelText, key) : 0;
+                  const nameScore = selectName ? calculateMatchScore(selectName, key) : 0;
+                  const placeholderScore = selectPlaceholder ? calculateMatchScore(selectPlaceholder, key) : 0;
+
+                  const maxScore = Math.max(labelScore, nameScore, placeholderScore);
+
+                  if (maxScore > 5 && (!bestMatch || maxScore > bestMatch.score)) {
+                    bestMatch = { key, value, score: maxScore };
+                  }
+                }
+
+                if (bestMatch) {
+                  selectedValue = bestMatch.value;
+                  matchMethod = `semantic match: "${bestMatch.key}" (score: ${bestMatch.score})`;
+                }
+              }
+            }
+
             const options = await select.$$('option');
             if (options.length > 1) {
-              // Select second option (first is usually placeholder)
-              await select.selectOption({ index: 1 });
-              const selectName = await select.getAttribute('name').catch(() => '');
-              console.log(`✓ Selected option in dropdown: ${selectName}`);
+              if (selectedValue) {
+                console.error(`🎯 Attempting to select value "${selectedValue}" via ${matchMethod}`);
+
+                // Tier 3: Find matching option with flexible matching
+                let foundMatch = false;
+
+                for (let i = 0; i < options.length; i++) {
+                  const optionText = await options[i].evaluate((el: any) => el.textContent || '').catch(() => '');
+                  const optionValue = await options[i].getAttribute('value').catch(() => '');
+
+                  if (matchesOptionValue(optionText, selectedValue) || matchesOptionValue(optionValue, selectedValue)) {
+                    await select.selectOption({ index: i });
+                    // Trigger change event to ensure form recognizes the selection
+                    await select.dispatchEvent('change').catch(() => {});
+                    await select.dispatchEvent('input').catch(() => {});
+                    // Wait a bit for form to process the selection
+                    await page.waitForTimeout(500);
+                    console.error(`✅ Selected dropdown option: "${optionText.trim()}" for ${matchMethod}`);
+                    foundMatch = true;
+                    break;
+                  }
+                }
+
+                if (!foundMatch) {
+                  console.error(`⚠️ No matching option found for "${selectedValue}", selecting default (2nd option)`);
+                  await select.selectOption({ index: 1 });
+                  // Trigger change event
+                  await select.dispatchEvent('change').catch(() => {});
+                  await select.dispatchEvent('input').catch(() => {});
+                }
+              } else {
+                // No custom value specified, select second option as default (first is usually placeholder)
+                await select.selectOption({ index: 1 });
+                // Trigger change event
+                await select.dispatchEvent('change').catch(() => {});
+                await select.dispatchEvent('input').catch(() => {});
+                console.error(`✓ Selected default option (index 1) for dropdown`);
+              }
             }
           } catch (error) {
+            console.error(`⚠️ Error handling dropdown: ${error}`);
             continue;
           }
         }
@@ -651,21 +868,25 @@ export class ChiliPiperScraper {
         'button[data-test-id*="submit"]',
         'button[data-test-id*="continue"]',
         '.submit-button',
-        '.continue-button'
+        '.continue-button',
+        'button:not([disabled])', // Try any enabled button as last resort
       ];
-      
+
+      // For Concierge Router forms, wait longer for submit button (form may need to validate dropdown selection)
+      const submitTimeout = isConciergeRouter ? 2000 : 200;
+
       let submitClicked = false;
       for (const selector of submitSelectors) {
         try {
           // Try clicking immediately without wait (button should be ready)
-          await page.click(selector, { timeout: 200 });
+          await page.click(selector, { timeout: submitTimeout });
           console.log(`✅ Successfully clicked submit button using selector: ${selector}`);
           submitClicked = true;
           break;
         } catch (error) {
           // If immediate click fails, try with short wait
           try {
-            await page.waitForSelector(selector, { timeout: 200 });
+            await page.waitForSelector(selector, { timeout: submitTimeout });
             await page.click(selector);
             console.log(`✅ Successfully clicked submit button using selector: ${selector}`);
             submitClicked = true;
