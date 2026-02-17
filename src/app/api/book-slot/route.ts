@@ -49,16 +49,16 @@ function parseDateTime(
     let extractedTz: string | null = null;
 
     // Try to extract IANA-style timezone first (e.g., America/Chicago)
-    const ianaMatch = dateTimeString.match(/\s+([A-Za-z]+\/[A-Za-z_]+)[\s,]*$/);
+    const ianaMatch = cleaned.match(/\s+([A-Za-z]+\/[A-Za-z_]+)[\s,]*$/);
     if (ianaMatch) {
       extractedTz = ianaMatch[1];
-      cleaned = dateTimeString.replace(/\s+[A-Za-z]+\/[A-Za-z_]+[\s,]*$/, '').trim();
+      cleaned = cleaned.replace(/\s+[A-Za-z]+\/[A-Za-z_]+[\s,]*$/, '').trim();
     } else {
       // Try abbreviated timezone (CST, EST, etc.) - but NOT AM/PM
-      const tzMatch = dateTimeString.match(/\s+([A-Z]{2,4})[\s,]*$/i);
+      const tzMatch = cleaned.match(/\s+([A-Z]{2,4})[\s,]*$/i);
       if (tzMatch && !['AM', 'PM'].includes(tzMatch[1].toUpperCase())) {
         extractedTz = tzMatch[1].toUpperCase();
-        cleaned = dateTimeString.replace(/\s+[A-Z]{2,4}[\s,]*$/i, '').trim();
+        cleaned = cleaned.replace(/\s+[A-Z]{2,4}[\s,]*$/i, '').trim();
       }
     }
 
