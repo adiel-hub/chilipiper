@@ -375,9 +375,29 @@ async function createInstanceForEmail(
 export async function POST(request: NextRequest) {
   const requestStartTime = Date.now();
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  
+
   try {
+    console.log("\n═══════════════════════════════════════════════════════");
+    console.log("📅 [BOOK-SLOT] ===== NEW BOOKING REQUEST =====");
+    console.log("═══════════════════════════════════════════════════════");
+    console.log(`📋 [BOOK-SLOT] Request ID: ${requestId}`);
+    console.log(`⏰ [BOOK-SLOT] Timestamp: ${new Date().toISOString()}`);
+    console.log(`🌐 [BOOK-SLOT] Request URL: ${request.url}`);
+    console.log(`📍 [BOOK-SLOT] Client IP: ${request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown"}`);
+    console.log(`🤖 [BOOK-SLOT] User Agent: ${request.headers.get("user-agent") || "unknown"}`);
+
+    // Log raw request body
+    try {
+      const clonedRequest = request.clone();
+      const rawBody = await clonedRequest.text();
+      console.log(`📦 [BOOK-SLOT] Raw Request Body:`);
+      console.log(rawBody);
+    } catch (e) {
+      console.log(`⚠️ [BOOK-SLOT] Could not log raw body: ${e}`);
+    }
+
     // Apply security middleware (no auth required - public API)
+    console.log(`🔒 [BOOK-SLOT] Applying security middleware...`);
     const securityResult = await security.secureRequest(request, {
       requireAuth: false, // Public API - no authentication required
       rateLimit: { maxRequests: 100, windowMs: 15 * 60 * 1000 }, // 100 requests per 15 minutes
@@ -464,9 +484,24 @@ export async function POST(request: NextRequest) {
     const { date, time } = parsed;
     const formattedTime = formatTimeForSlot(time);
 
+    console.log(`✅ [BOOK-SLOT] Security check PASSED`);
+    console.log(`📋 [BOOK-SLOT] Parsed dateTime: ${date} ${time}`);
+    console.log(`📋 [BOOK-SLOT] Formatted time for slot: ${formattedTime}`);
+    console.log(`👤 [BOOK-SLOT] Email: ${email}`);
+    console.log(`👤 [BOOK-SLOT] Name: ${firstName} ${lastName}`);
+    console.log(`📞 [BOOK-SLOT] Phone: ${phone}`);
+    console.log(`🔗 [BOOK-SLOT] Chili Piper URL: ${chili_piper_url}`);
+    if (timezone) {
+      console.log(`🕐 [BOOK-SLOT] User Timezone: ${timezone}`);
+    }
+    if (custom_params) {
+      console.log(`📦 [BOOK-SLOT] Custom Params:`, JSON.stringify(custom_params));
+    }
+
     // Test mode: If email contains "test", return success without actually booking
     if (email.toLowerCase().includes('test')) {
-      console.log(`🧪 Test mode: Email contains "test", returning mock success response`);
+      console.log(`🧪 [BOOK-SLOT] TEST MODE ACTIVATED - Email contains "test"`);
+      console.log(`🧪 [BOOK-SLOT] Returning mock success response without actual booking`);
       const responseTime = Date.now() - requestStartTime;
 
       // Format dateTime with timezone
@@ -522,20 +557,33 @@ export async function POST(request: NextRequest) {
       return security.addSecurityHeaders(response);
     }
 
+    console.log("\n───────────────────────────────────────────────────────");
+    console.log("🚀 [BOOK-SLOT] ===== STARTING BOOKING PROCESS =====");
+    console.log("───────────────────────────────────────────────────────");
+    console.log(`🎯 [BOOK-SLOT] Target Date: ${date}`);
+    console.log(`🎯 [BOOK-SLOT] Target Time: ${time}`);
+    console.log(`🎯 [BOOK-SLOT] Slot ID to click: slot-${formattedTime}`);
+
     // Run booking through concurrency manager
+    const bookingStartTime = Date.now();
+    console.log(`🚀 [BOOK-SLOT] Executing booking task...`);
+
     const result = await concurrencyManager.execute(async () => {
+      console.log(`🏗️ [BOOK-SLOT] Creating scraper instance...`);
       const scraper = new ChiliPiperScraper(chili_piper_url);
 
       // Try to get existing instance (use email if provided, otherwise generate unique key)
       const instanceKey = email || `booking_${Date.now()}`;
+      console.log(`🔍 [BOOK-SLOT] Looking for existing browser instance for: ${instanceKey}`);
       let instance = email ? scraper.getExistingInstance(email) : null;
       let browser: any = null;
       let context: any = null;
       let page: any = null;
 
       if (!instance) {
-        // Create new instance on-demand
-        console.log(`📝 No existing instance for ${instanceKey}, creating new one...`);
+        console.log(`📝 [BOOK-SLOT] No existing instance found for ${instanceKey}`);
+        console.log(`🆕 [BOOK-SLOT] Creating new browser instance...`);
+
         const newInstance = await createInstanceForEmail(
           email || '',
           firstName || '',
@@ -545,20 +593,26 @@ export async function POST(request: NextRequest) {
           custom_params,
           timezone // User's timezone - browser will emulate this so times match
         );
+
         if (!newInstance) {
+          console.error(`❌ [BOOK-SLOT] Failed to create browser instance`);
           throw new Error('Failed to create browser instance');
         }
+
+        console.log(`✅ [BOOK-SLOT] New browser instance created successfully`);
         browser = newInstance.browser;
         context = newInstance.context;
         page = newInstance.page;
-        
+
         // Register the instance
+        console.log(`📝 [BOOK-SLOT] Registering browser instance...`);
         await browserInstanceManager.registerInstance(email, browser, context, page);
+        console.log(`✅ [BOOK-SLOT] Browser instance registered`);
       } else {
+        console.log(`♻️ [BOOK-SLOT] Using existing browser instance for ${email}`);
         browser = instance.browser;
         context = instance.context;
         page = instance.page;
-        console.log(`✅ Using existing instance for ${email}`);
       }
 
       // Verify page is still valid
@@ -574,9 +628,12 @@ export async function POST(request: NextRequest) {
       }
 
       // Find and click the day button
+      console.log(`📅 [BOOK-SLOT] Looking for day buttons on calendar...`);
       const dayButtons = await page.$$('[data-id="calendar-day-button"], button[data-test-id^="days:"]');
+      console.log(`📅 [BOOK-SLOT] Found ${dayButtons.length} day buttons`);
+
       let dayClicked = false;
-      
+
       for (const button of dayButtons) {
         try {
           const buttonText = await button.textContent();
@@ -601,17 +658,24 @@ export async function POST(request: NextRequest) {
                                 buttonTextLower.includes(targetMonthName.substring(0, 3));
           
           if (day === targetDay && hasTargetMonth) {
+            console.log(`✅ [BOOK-SLOT] Found matching day button: ${buttonText.substring(0, 50)}`);
+            console.log(`🖱️ [BOOK-SLOT] Clicking day button for ${date}...`);
             await button.click();
             dayClicked = true;
-            console.log(`✅ Clicked day button for ${date}`);
+            console.log(`✅ [BOOK-SLOT] Day button clicked successfully`);
             break;
+          } else {
+            console.log(`⏭️ [BOOK-SLOT] Skipping button (day=${day}, targetDay=${targetDay}, hasMonth=${hasTargetMonth})`);
           }
         } catch (error) {
+          console.log(`⚠️ [BOOK-SLOT] Error processing button: ${error}`);
           continue;
         }
       }
 
       if (!dayClicked) {
+        console.error(`❌ [BOOK-SLOT] Day button NOT FOUND for date ${date}`);
+        console.error(`❌ [BOOK-SLOT] Checked ${dayButtons.length} buttons`);
         throw new Error(`Day button not found for date ${date}`);
       }
 
@@ -645,7 +709,11 @@ export async function POST(request: NextRequest) {
       }
 
       // Find and click the time slot button
+      console.log(`⏰ [BOOK-SLOT] Looking for time slot button...`);
       const slotTimeId = `slot-${formattedTime}`;
+      console.log(`🎯 [BOOK-SLOT] Target slot ID: ${slotTimeId}`);
+      console.log(`🎯 [BOOK-SLOT] Target time: ${time}`);
+
       let slotClicked = false;
       
       // Helper function to normalize time for comparison
@@ -736,26 +804,36 @@ export async function POST(request: NextRequest) {
       }
 
       if (!slotClicked) {
+        console.error(`❌ [BOOK-SLOT] Time slot button NOT FOUND`);
         // Get available slots one more time for error message
         let availableSlotInfo = '';
         try {
-          const slots = await page.$$eval('[data-id="calendar-slot"], button[data-test-id^="slot-"]', 
+          const slots = await page.$$eval('[data-id="calendar-slot"], button[data-test-id^="slot-"]',
             (buttons: Element[]) => buttons.map((b: Element) => b.textContent?.trim()).filter(Boolean) as string[]
           );
+          console.error(`📋 [BOOK-SLOT] Available slots on page: ${slots.join(', ')}`);
           availableSlotInfo = ` Available slots: ${slots.join(', ')}`;
         } catch {}
-        
+
         throw new Error(`Time slot button not found for time ${time} (formatted: ${slotTimeId}).${availableSlotInfo}`);
       }
+
+      console.log(`✅ [BOOK-SLOT] Time slot clicked successfully`);
+      console.log(`⏳ [BOOK-SLOT] Waiting for booking to be processed...`);
 
       // Wait a moment to ensure booking is processed
       await page.waitForTimeout(1000);
 
+      console.log(`🧹 [BOOK-SLOT] Cleaning up browser instance...`);
       // Close instance after successful booking
       await browserInstanceManager.cleanupInstance(email);
+      console.log(`✅ [BOOK-SLOT] Browser instance cleaned up`);
 
       return { success: true, date, time };
     }, 30000); // 30 second timeout for booking
+
+    const bookingDuration = Date.now() - bookingStartTime;
+    console.log(`⏱️ [BOOK-SLOT] Booking duration: ${bookingDuration}ms`);
 
     const responseTime = Date.now() - requestStartTime;
 
@@ -792,6 +870,13 @@ export async function POST(request: NextRequest) {
       }
     };
 
+    console.log("\n───────────────────────────────────────────────────────");
+    console.log("✅ [BOOK-SLOT] ===== BOOKING SUCCESSFUL =====");
+    console.log("───────────────────────────────────────────────────────");
+    console.log(`📅 [BOOK-SLOT] Booked Date: ${result.date}`);
+    console.log(`⏰ [BOOK-SLOT] Booked Time: ${result.time}`);
+    console.log(`⏱️ [BOOK-SLOT] Total response time: ${responseTime}ms`);
+
     const successResponse = ErrorHandler.createSuccess(
       SuccessCode.OPERATION_SUCCESS,
       {
@@ -804,6 +889,9 @@ export async function POST(request: NextRequest) {
       responseTime
     );
 
+    console.log(`📤 [BOOK-SLOT] Sending success response`);
+    console.log("═══════════════════════════════════════════════════════\n");
+
     const response = NextResponse.json(
       successResponse,
       { status: ErrorHandler.getSuccessStatusCode() }
@@ -811,7 +899,13 @@ export async function POST(request: NextRequest) {
     return security.addSecurityHeaders(response);
 
   } catch (error: any) {
-    console.error('❌ Booking API error:', error);
+    console.log("\n═══════════════════════════════════════════════════════");
+    console.error("❌ [BOOK-SLOT] ===== BOOKING ERROR =====");
+    console.log("═══════════════════════════════════════════════════════");
+    console.error(`💥 [BOOK-SLOT] Error type: ${error?.constructor?.name || "Unknown"}`);
+    console.error(`💥 [BOOK-SLOT] Error message: ${error?.message || "No message"}`);
+    console.error(`💥 [BOOK-SLOT] Error stack:`, error?.stack);
+    console.error(`📋 [BOOK-SLOT] Request ID: ${requestId}`);
 
     const responseTime = Date.now() - requestStartTime;
 
