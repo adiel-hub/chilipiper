@@ -42,9 +42,11 @@ function parseDateTime(
   targetTimezone?: string
 ): { date: string; time: string } | null {
   try {
+    // Remove day of week if present (e.g., "Tuesday, February 17, 2026..." -> "February 17, 2026...")
+    let cleaned = dateTimeString.replace(/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s*/i, '');
+
     // Extract timezone from string if present (e.g., "... CST" or "... America/Chicago")
     let extractedTz: string | null = null;
-    let cleaned = dateTimeString;
 
     // Try to extract IANA-style timezone first (e.g., America/Chicago)
     const ianaMatch = dateTimeString.match(/\s+([A-Za-z]+\/[A-Za-z_]+)[\s,]*$/);
@@ -461,9 +463,12 @@ export async function POST(request: NextRequest) {
     // Parse date/time - no timezone conversion needed since browser will emulate user's timezone
     // The times displayed by Chili Piper will match what the user expects
     if (timezone) {
-      console.log(`🕐 User timezone: ${timezone} (browser will emulate this timezone)`);
+      console.log(`🕐 [BOOK-SLOT] User timezone: ${timezone} (browser will emulate this timezone)`);
     }
+
+    console.log(`🔍 [BOOK-SLOT] About to parse dateTime: "${dateTime}"`);
     const parsed = parseDateTime(dateTime);
+    console.log(`📊 [BOOK-SLOT] parseDateTime result:`, parsed);
     if (!parsed) {
       const responseTime = Date.now() - requestStartTime;
       const errorResponse = ErrorHandler.createError(
