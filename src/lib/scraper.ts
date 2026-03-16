@@ -632,7 +632,11 @@ export class ChiliPiperScraper {
       
       // Navigate to parameterized URL
       console.log(`🚀 Navigating directly to parameterized URL (skipping form)`);
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+
+      // Wait for Chili Piper widget to fully render
+      console.log(`⏳ Waiting for Chili Piper widget to render...`);
+      await page.waitForTimeout(3000);
 
       // Check if this is a Concierge Router form (routing form that redirects to calendar)
       const isConciergeRouter = this.baseUrl.includes('/concierge-router/');
@@ -950,6 +954,40 @@ export class ChiliPiperScraper {
 
       // Skip wait - page should already be on calendar or schedule choice
       console.log("⏳ Checking for calendar/schedule page...");
+
+      // Debug: Log page state after navigation
+      try {
+        const currentUrl = page.url();
+        const title = await page.title().catch(() => 'unknown');
+        console.log(`📄 [DEBUG] Current URL after navigation: ${currentUrl}`);
+        console.log(`📄 [DEBUG] Page title: ${title}`);
+
+        // Check for iframes
+        const frames = page.frames();
+        console.log(`📄 [DEBUG] Number of frames: ${frames.length}`);
+        for (let i = 0; i < frames.length; i++) {
+          console.log(`📄 [DEBUG] Frame ${i}: ${frames[i].url()}`);
+        }
+
+        // Log visible text on page (first 500 chars)
+        const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || 'NO BODY TEXT').catch(() => 'EVAL FAILED');
+        console.log(`📄 [DEBUG] Page body text: ${bodyText}`);
+
+        // Check what elements exist
+        const elementCheck = await page.evaluate(() => {
+          const checks: Record<string, number> = {};
+          checks['buttons'] = document.querySelectorAll('button').length;
+          checks['iframes'] = document.querySelectorAll('iframe').length;
+          checks['forms'] = document.querySelectorAll('form').length;
+          checks['inputs'] = document.querySelectorAll('input').length;
+          checks['[data-id]'] = document.querySelectorAll('[data-id]').length;
+          checks['[data-test-id]'] = document.querySelectorAll('[data-test-id]').length;
+          return checks;
+        }).catch(() => ({}));
+        console.log(`📄 [DEBUG] Element counts:`, JSON.stringify(elementCheck));
+      } catch (debugError) {
+        console.log(`⚠️ [DEBUG] Error getting page state: ${debugError}`);
+      }
       
       // Look for "Schedule a meeting" or similar options (optional - sometimes page goes directly to calendar)
       // Based on HTML: data-test-id="ConciergeLiveBox-book" or data-id="concierge-live-book"
