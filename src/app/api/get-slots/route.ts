@@ -86,7 +86,7 @@ export async function POST(request: NextRequest) {
       const params = body.custom_params as Record<string, any>;
       firstName = firstName || params.firstname || params.first_name || "";
       lastName = lastName || params.lastname || params.last_name || "";
-      phone = phone || params.phone || "";
+      phone = phone || params.phone || params.phone_number || "";
       email = email || params.email || "";
     }
 
