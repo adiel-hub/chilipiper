@@ -952,6 +952,39 @@ export class ChiliPiperScraper {
         }
       }
 
+      // For non-concierge-router pages, submit the pre-filled form
+      if (!isConciergeRouter) {
+        console.log("⚡ Round-robin page - submitting pre-filled form...");
+        const submitSelectors = [
+          'button[type="submit"]',
+          'input[type="submit"]',
+          'button:has-text("Submit")',
+          'button:has-text("Continue")',
+          '[data-test-id="GuestForm-submit-button"]',
+          'button[data-test-id*="submit"]',
+          'button[data-test-id*="continue"]',
+        ];
+
+        let submitClicked = false;
+        for (const selector of submitSelectors) {
+          try {
+            await page.click(selector, { timeout: 500 });
+            console.log(`✅ Clicked submit button: ${selector}`);
+            submitClicked = true;
+            break;
+          } catch {
+            continue;
+          }
+        }
+
+        if (!submitClicked) {
+          console.log("⚠️ No submit button found - page may auto-submit or go directly to calendar");
+        } else {
+          console.log("✅ Form submitted - waiting for calendar to load...");
+          await page.waitForTimeout(2000);
+        }
+      }
+
       // Skip wait - page should already be on calendar or schedule choice
       console.log("⏳ Checking for calendar/schedule page...");
 
