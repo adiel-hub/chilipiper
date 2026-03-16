@@ -264,6 +264,7 @@ async function createInstanceForEmail(
         console.log(`🕐 Setting browser timezone to: ${browserTimezone}`);
         context = await browser.newContext({
           timezoneId: browserTimezone,
+          userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         });
         page = await context.newPage();
         break; // Success, exit retry loop

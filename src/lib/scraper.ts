@@ -581,6 +581,7 @@ export class ChiliPiperScraper {
             console.log(`🕐 Setting browser timezone to: ${browserTimezone}`);
             context = await browser.newContext({
               timezoneId: browserTimezone,
+              userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             });
             page = await context.newPage();
             break; // Success, exit retry loop
@@ -632,11 +633,11 @@ export class ChiliPiperScraper {
       
       // Navigate to parameterized URL
       console.log(`🚀 Navigating directly to parameterized URL (skipping form)`);
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.goto(targetUrl, { waitUntil: 'load', timeout: 30000 });
 
-      // Wait for Chili Piper widget to fully render
+      // Wait for Chili Piper React app to hydrate and render
       console.log(`⏳ Waiting for Chili Piper widget to render...`);
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(5000);
 
       // Check if this is a Concierge Router form (routing form that redirects to calendar)
       const isConciergeRouter = this.baseUrl.includes('/concierge-router/');
